@@ -109,10 +109,10 @@ class Stroll(go2_base.Go2Env):
       if MOV_TYPE == "Omni-directional":
           return jax.random.uniform(key, shape=(3,), minval=-self._cmd_a, maxval=self._cmd_a)
       # In one axis
-      elif MOV_TYPE == "One axis":
+      elif MOV_TYPE == "One-axis":
           return jax.random.uniform(key, shape=(3,), minval=-jp.array([self._cmd_a[0], 0., 0.]), maxval=jp.array([self._cmd_a[0], 0., 0.]))
       # In one direction
-      elif MOV_TYPE == "One direction":
+      elif MOV_TYPE == "One-directional":
           return jax.random.uniform(key, shape=(3,), minval=-jp.array([0., 0., 0.]), maxval=jp.array([self._cmd_a[0], 0., 0.]))
       
   def __init__(

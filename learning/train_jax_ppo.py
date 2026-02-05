@@ -41,7 +41,8 @@ from mujoco_playground.config import locomotion_params
 from mujoco_playground.config import manipulation_params
 import tensorboardX
 import wandb
-
+from worldModel.rollout_saver import WorldModelRolloutSaver
+from visualize import interactive_visualization
 
 xla_flags = os.environ.get("XLA_FLAGS", "")
 xla_flags += " --xla_gpu_triton_gemm_any=True"
@@ -430,10 +431,23 @@ def main(argv):
         rscope_fn,
     )
 
-    def policy_params_fn(current_step, make_policy, params):  # pylint: disable=unused-argument
+  # Configuration for world model dataset collection
+  wm_saver = WorldModelRolloutSaver(
+    env=eval_env,
+    episode_length=ppo_params.episode_length,
+    num_envs=64,
+    data_dir="world_model_dataset",
+    deterministic=False,
+  )
+
+  def policy_params_fn(current_step, make_policy, params):  # pylint: disable=unused-argument
+    if _RSCOPE_ENVS.value:
       rscope_handle.set_make_policy(make_policy)
       rscope_handle.dump_rollout(params)
-
+    
+    wm_saver.set_make_policy(make_policy)
+    wm_saver.dump_rollout(params, current_step)
+  
   # Train or load the model
   make_inference_fn, params, _ = train_fn(  # pylint: disable=no-value-for-parameter
       environment=env,
@@ -451,6 +465,9 @@ def main(argv):
 
   # Create inference function.
   inference_fn = make_inference_fn(params, deterministic=True)
+
+  interactive_visualization(eval_env, inference_fn)
+  
   jit_inference_fn = jax.jit(inference_fn)
 
   # Run evaluation rollouts.
