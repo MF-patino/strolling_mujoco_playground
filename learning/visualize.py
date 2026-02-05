@@ -1,3 +1,10 @@
+from brax.training.agents.ppo import networks as ppo_networks
+import functools
+from mujoco_playground import registry
+from brax.training.acme import running_statistics
+from brax.training.agents.ppo import checkpoint
+from mujoco_playground.config import locomotion_params
+
 import time
 import jax
 import jax.numpy as jp
@@ -16,7 +23,7 @@ import matplotlib.pyplot as plt
 # TODO: integrate the policy loading logic into the controller
 class RobotController:
     def __init__(self):
-        # 1. Load Pre-trained Weights
+        # Load Pre-trained Weights
         with open(MODEL_SAVE_PATH, 'rb') as f:
             params = pickle.load(f)
         with open(STATS_SAVE_PATH, 'rb') as f:
@@ -25,7 +32,7 @@ class RobotController:
         sensor_dim = self.stats['obs_mean'].shape[0]
         action_dim = self.stats['act_mean'].shape[0]
 
-        # Initialize Training State (Optimizer)
+        # Initialize training state (Optimizer)
         rng = jax.random.PRNGKey(0)
         self.wm_state = create_train_state(rng, learning_rate=1e-5, sensor_dim=sensor_dim, action_dim=action_dim) # Low LR for stability
         self.wm_state = self.wm_state.replace(params=params)
@@ -42,21 +49,20 @@ class RobotController:
         norm_obs = (obs - self.stats['obs_mean']) / self.stats['obs_std']
         norm_act = (action - self.stats['act_mean']) / self.stats['act_std']
 
-        # Predict
         norm_delta = self.wm_state.apply_fn(
             {'params': self.wm_state.params}, norm_obs, norm_act
         )
 
-        # Denormalize to check error in REAL units (e.g. degrees per second)
+        # Denormalize to check error in real units (e.g. degrees per second)
         pred_next_obs = obs + (norm_delta * self.stats['delta_std']) + self.stats['delta_mean']
         
-        # Calculate Error
+        # Calculate error
         error = jp.mean((pred_next_obs - next_obs) ** 2)
         self.errors.append(error)
         
         if len(self.errors) == 500:
             plt.hist(self.errors, bins=25, range=(0, 2))
-            plt.title("Error Distribution on Flat Ground (Zoomed 0-2)")
+            plt.title("Error distribution on flat ground (Zoomed 0-2)")
             plt.show()
 
 def interactive_visualization(env, inference_fn):
@@ -78,28 +84,21 @@ def interactive_visualization(env, inference_fn):
         model = env.unwrapped.mj_model
         
     data = mujoco.MjData(model)
-
-    # 2. Prepare JAX functions (jit them for performance)
-    # We use a specific RNG key for the viz
     rng = jax.random.PRNGKey(0)
     
-    # We need a single instance, not vmapped, but playground envs might 
-    # expect batched inputs if configured that way. 
-    # Assuming standard eval_env here.
     jit_reset = jax.jit(env.reset)
     jit_step = jax.jit(env.step)
     jit_inference = jax.jit(inference_fn)
 
-    # 3. Initialize the Simulation State
+    # Initialize the Simulation State
     rng, key1 = jax.random.split(rng)
     state = jit_reset(rng)
     
+    reset_timer = 0
     control_dt = getattr(env, 'dt', model.opt.timestep)
-    
-    timer = 0
-    print(f"Simulation running at Control DT: {control_dt:.4f}s")
+    print(f"Simulation running at control DT: {control_dt:.4f}s")
 
-    # 4. Launch the Viewer
+    # Launch the viewer
     with mujoco.viewer.launch_passive(model, data) as viewer:
         
         # Initialize viewer camera if needed
@@ -109,34 +108,32 @@ def interactive_visualization(env, inference_fn):
         step_start = time.time()
         
         while viewer.is_running():
-            if timer >= 10:
+            # Reset after 10 seconds
+            if reset_timer >= 10:
                 rng, key1 = jax.random.split(rng)
                 state = jit_reset(rng)
-                timer = 0
+                reset_timer = 0
                 #print("Resetting")
 
+            # Instruct robot to go always forwards
             state.info["command"] = jp.array([1., 0., 0.])
-            step_start = time.time()
 
-            # --- A. INFERENCE & PHYSICS (GPU/JAX) ---
+            step_start = time.time()
             rng, act_rng = jax.random.split(rng)
             
             # Run Policy
             action = jit_inference(state.obs, act_rng)[0]
 
-            # Step Environment
-            # Note: We don't use 'do_rollout' here because we want to loop indefinitely
+            # Step environment
             prev_obs = state.obs["wm_state"]
             state = jit_step(state, action)
             controller.control_loop(prev_obs, action, state.obs["wm_state"])
 
             # Ensure computation is done before we try to read it
             state.data.qpos.block_until_ready()
-            # --- B. SYNC TO CPU VIEWER ---
             
             # Extract qpos/qvel from JAX to Numpy (CPU)
             # Copy to the viewer's data structure
-            # We use np.array() to enforce the transfer from JAX device array to CPU numpy
             data.qpos[:] = np.array(state.data.qpos)
             data.qvel[:] = np.array(state.data.qvel)
 
@@ -146,19 +143,11 @@ def interactive_visualization(env, inference_fn):
             # Sync the viewer
             viewer.sync()
 
-            timer += control_dt
+            reset_timer += control_dt
             elapsed = time.time() - step_start
             # Sleep only the remaining time to match real-time
             if elapsed < control_dt:
                 time.sleep(control_dt - elapsed)
-
-
-from brax.training.agents.ppo import networks as ppo_networks
-import functools
-from mujoco_playground import registry
-from brax.training.acme import running_statistics
-from brax.training.agents.ppo import checkpoint
-from mujoco_playground.config import locomotion_params
 
 def main():
     '''
