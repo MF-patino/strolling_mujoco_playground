@@ -23,7 +23,6 @@ from mujoco import mjx
 from mujoco.mjx._src import math
 import numpy as np
 
-from mujoco_playground._src import collision
 from mujoco_playground._src import mjx_env
 from mujoco_playground._src.locomotion.go2 import base as go2_base
 from mujoco_playground._src.locomotion.go2 import go2_constants as consts
@@ -133,6 +132,12 @@ class Handstand(go2_base.Go2Env):
         [self._mj_model.geom(name).id for name in feet_geom_names]
     )
 
+    # Contact sensor ids.
+    self._fullcollision_floor_found_sensor = [
+        self._mj_model.sensor(f"{geom}_floor_found").id
+        for geom in geom_names
+    ]
+
   def reset(self, rng: jax.Array) -> mjx_env.State:
     rng, reset_rng = jax.random.split(rng)
 
@@ -172,8 +177,8 @@ class Handstand(go2_base.Go2Env):
       metrics[f"reward/{k}"] = jp.zeros(())
 
     contact = jp.array([
-        collision.geoms_colliding(data, geom_id, self._floor_geom_id)
-        for geom_id in self._unwanted_contact_geom_ids
+        data.sensordata[self._mj_model.sensor_adr[sensorid]] > 0
+        for sensorid in self._fullcollision_floor_found_sensor
     ])
     obs = self._get_obs(data, info, contact)
     reward, done = jp.zeros(2)
@@ -186,8 +191,8 @@ class Handstand(go2_base.Go2Env):
     )
 
     contact = jp.array([
-        collision.geoms_colliding(data, geom_id, self._floor_geom_id)
-        for geom_id in self._unwanted_contact_geom_ids
+        data.sensordata[self._mj_model.sensor_adr[sensorid]] > 0
+        for sensorid in self._fullcollision_floor_found_sensor
     ])
     obs = self._get_obs(data, state.info, contact)
     done = self._get_termination(data, state.info, contact)
@@ -341,8 +346,8 @@ class Handstand(go2_base.Go2Env):
 
   def _cost_contact(self, data: mjx.Data) -> jax.Array:
     feet_contact = jp.array([
-        collision.geoms_colliding(data, geom_id, self._floor_geom_id)
-        for geom_id in self._feet_geom_ids
+        data.sensordata[self._mj_model.sensor_adr[sensorid]] > 0
+        for sensorid in self._feet_floor_found_sensor
     ])
     return jp.any(feet_contact)
 
