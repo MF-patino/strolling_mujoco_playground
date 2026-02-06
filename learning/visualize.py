@@ -19,6 +19,57 @@ import matplotlib
 matplotlib.use('TkAgg') 
 import matplotlib.pyplot as plt
 
+from collections import deque
+from scipy.stats import ks_2samp
+
+class KSDriftDetector:
+    def __init__(self, total_size=1000, window_size=250, p_threshold=1e-4):
+        """
+        A sliding window drift detector.
+
+        Args:
+            total_size (int): Total buffer length (Reference + Window).
+                              e.g., 1000 steps = 20 seconds at 50Hz.
+            window_size (int): The size of the "Current" window to test.
+                               The 'Reference' size becomes (total_size - window_size).
+            p_threshold (float): Sensitivity. Lower = less sensitive.
+        """
+        self.buffer = deque(maxlen=total_size)
+        self.window_size = window_size
+        self.p_threshold = p_threshold
+        
+        # Minimum samples needed before we start testing
+        # We need at least full window + some reference
+        self.min_samples = window_size * 2 
+
+    def update(self, error_val):
+        """
+        Input: error_val (float)
+        Returns: is_drift (bool), p_value (float)
+        """
+        self.buffer.append(error_val)
+
+        # Check if we have enough data
+        if len(self.buffer) < self.min_samples:
+            return False, 1.0
+
+        data = list(self.buffer)
+        
+        # Reference: Everything EXCEPT the last N elements
+        # Window: The last N elements
+        reference_data = data[:-self.window_size]
+        window_data = data[-self.window_size:]
+
+        # Run KS Test
+        _, pvalue = ks_2samp(reference_data, window_data)
+
+        # Detection logic
+        # - pvalue < threshold: The distributions look different
+        # - mean(window) > mean(ref): The error got WORSE (we ignore if it gets better)
+        is_drift = (pvalue < self.p_threshold) and (np.mean(window_data) > np.mean(reference_data))
+
+        return is_drift, pvalue
+    
 def load_env(env_name, impl):
     env_cfg = registry.get_default_config(env_name)
     env_cfg["impl"] = impl
@@ -49,6 +100,10 @@ class RobotController:
         # History for domain detection
         self.errors = []
 
+        # total_size=1000: Takes 20 seconds to fill the queue
+        # window_size=250: Detect changes based on the last 5 seconds of data
+        self.detector = KSDriftDetector(total_size=1000, window_size=250, p_threshold=1e-3)
+
     def control_loop(self, obs, action, next_obs):
         # Predict what should have happened
 
@@ -66,10 +121,16 @@ class RobotController:
         error = jp.mean((pred_next_obs - next_obs) ** 2)
         self.errors.append(error)
         
-        if len(self.errors) == 500:
-            plt.hist(self.errors, bins=25, range=(0, 2))
-            plt.title("Error distribution on flat ground (Zoomed 0-2)")
-            plt.show()
+        # Update Detector
+        is_drift, p_val = self.detector.update(error)
+        
+        if is_drift:
+            print(f"!!! DOMAIN CHANGE DETECTED !!! p={p_val:.2e}.")
+
+        #if len(self.errors) == 500:
+        #    plt.hist(self.errors, bins=25, range=(0, 2))
+        #    plt.title("Error distribution on flat ground (Zoomed 0-2)")
+        #    plt.show()
 
 def interactive_visualization(env, inference_fn, controller=RobotController(), resetNum=-1):
     """
@@ -203,8 +264,10 @@ def main():
 
     controller = RobotController()
 
-    interactive_visualization(env, inference_fn, controller, resetNum=1)
-    interactive_visualization(rough_env, inference_fn, controller, resetNum=1)
+    interactive_visualization(env, inference_fn, controller, resetNum=2)
+    interactive_visualization(rough_env, inference_fn, controller, resetNum=2)
+    interactive_visualization(env, inference_fn, controller, resetNum=2)
+    interactive_visualization(rough_env, inference_fn, controller, resetNum=2)
 
 if __name__ == "__main__":
     main()
