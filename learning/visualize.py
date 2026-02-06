@@ -19,6 +19,12 @@ import matplotlib
 matplotlib.use('TkAgg') 
 import matplotlib.pyplot as plt
 
+def load_env(env_name, impl):
+    env_cfg = registry.get_default_config(env_name)
+    env_cfg["impl"] = impl
+
+    return registry.load(env_name, config=env_cfg)
+
 # Work in progress controller for the robot
 # TODO: integrate the policy loading logic into the controller
 class RobotController:
@@ -65,7 +71,7 @@ class RobotController:
             plt.title("Error distribution on flat ground (Zoomed 0-2)")
             plt.show()
 
-def interactive_visualization(env, inference_fn):
+def interactive_visualization(env, inference_fn, controller=RobotController(), resetNum=-1):
     """
     Opens an interactive MuJoCo viewer for a JAX-based environment.
     
@@ -74,7 +80,6 @@ def interactive_visualization(env, inference_fn):
         params: The trained policy parameters.
         inference_fn: The function make_inference_fn(params, deterministic=True).
     """
-    controller = RobotController()
 
     # Get the underlying standard MuJoCo model for the viewer
     if hasattr(env, 'mj_model'):
@@ -110,10 +115,14 @@ def interactive_visualization(env, inference_fn):
         while viewer.is_running():
             # Reset after 10 seconds
             if reset_timer >= 10:
+                #print("Resetting")
                 rng, key1 = jax.random.split(rng)
                 state = jit_reset(rng)
                 reset_timer = 0
-                #print("Resetting")
+                resetNum -= 1
+
+                if resetNum == 0:
+                    break
 
             # Instruct robot to go always forwards
             state.info["command"] = jp.array([1., 0., 0.])
@@ -159,11 +168,13 @@ def main():
     checkpoint_path = "/home/marcos/Escritorio/mujoco_playground/logs/Go2StrollFlatTerrain-20260122-183735/checkpoints/000200540160"
     impl = "jax"
 
-    env_cfg = registry.get_default_config(env_name)
-    env_cfg["impl"] = impl
+    env = load_env(env_name, impl)
+    rough_env = load_env("Go2StrollRoughTerrain", impl)
 
+    obs_shape, act_shape = env.observation_size, env.action_size
+
+    # Load network topology
     ppo_params = locomotion_params.brax_ppo_config(env_name, impl)
-    ppo_params.num_timesteps = 0
 
     normalize = lambda x, y: x
     if ppo_params.normalize_observations:
@@ -179,9 +190,8 @@ def main():
     else:
         network_factory = network_fn
     
-    env = registry.load(env_name, config=env_cfg)
     ppo_network = network_factory(
-      env.observation_size, env.action_size, preprocess_observations_fn=normalize
+      obs_shape, act_shape, preprocess_observations_fn=normalize
     )
 
     make_inference_fn = ppo_networks.make_inference_fn(ppo_network)
@@ -190,7 +200,11 @@ def main():
     params = checkpoint.load(checkpoint_path)
 
     inference_fn = make_inference_fn(params, deterministic=True)
-    interactive_visualization(env, inference_fn)
+
+    controller = RobotController()
+
+    interactive_visualization(env, inference_fn, controller, resetNum=1)
+    interactive_visualization(rough_env, inference_fn, controller, resetNum=1)
 
 if __name__ == "__main__":
     main()
