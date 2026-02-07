@@ -69,9 +69,17 @@ class KSDriftDetector:
         is_drift = self.adwin.drift_detected
 
         if is_drift:
-            self.adwin._reset()
+            self.reset(data)
 
         return is_drift, statistic
+    
+    # The reference data at the point of a domain change detection is filled with the previous domain's prediction errors. 
+    # This is stale data as now we are only concerned about the data from the new domain the robot is in.
+    # In this method, the reference data is cleared and the adwin detector is also reset
+    def reset(self, data):
+        self.buffer.clear()
+        self.buffer.extend(data[-self.window_size:])
+        self.adwin._reset()
     
 def load_env(env_name, impl):
     env_cfg = registry.get_default_config(env_name)
@@ -129,30 +137,29 @@ class RobotController:
         # Update Detector
         is_drift, statistic = self.detector.update(error)
 
-        if len(self.detector.buffer) >= self.detector.min_samples:
-            self.stat_values.append(statistic)
-            step = len(self.stat_values)
+        self.stat_values.append(statistic)
+        step = len(self.stat_values)
 
-            if is_drift:
-                idx = step - 1
-                self.drift_indices.append(idx)
-                print(f"!!! DOMAIN CHANGE DETECTED !!! statistic={statistic:.2e}.")
+        if is_drift:
+            idx = step - 1
+            self.drift_indices.append(idx)
+            print(f"!!! DOMAIN CHANGE DETECTED !!! statistic={statistic:.2e}.")
 
-            if step % 500 == 0:
-                #plt.hist(self.errors, bins=25, range=(0, 2))
-                #plt.title("Error distribution on flat ground (Zoomed 0-2)")
-                plt.plot(self.stat_values, label="KS statistic")
+        if step % 500 == 0 and step > self.detector.min_samples:
+            #plt.hist(self.errors, bins=25, range=(0, 2))
+            #plt.title("Error distribution on flat ground (Zoomed 0-2)")
+            plt.plot(self.stat_values, label="KS statistic")
 
-                plt.vlines(self.drift_indices,
-                    ymin=min(self.stat_values),
-                    ymax=max(self.stat_values),
-                    color="red", alpha=0.6, label='Drift detection')
+            plt.vlines(self.drift_indices,
+                ymin=min(self.stat_values),
+                ymax=max(self.stat_values),
+                color="red", alpha=0.6, label='Drift detection')
 
-                plt.xlabel("Time step")
-                plt.title("KS-ADWIN concept drift detector history")
-                plt.legend()
-                plt.tight_layout()
-                plt.show()
+            plt.xlabel("Time step")
+            plt.title("KS-ADWIN concept drift detector history")
+            plt.legend()
+            plt.tight_layout()
+            plt.show()
 
 def interactive_visualization(env, jit_inference, controller=RobotController(), resetNum=-1):
     """
