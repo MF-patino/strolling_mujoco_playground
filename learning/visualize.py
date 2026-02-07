@@ -99,6 +99,7 @@ class RobotController:
         
         # History for domain detection
         self.errors = []
+        self.p_values = []
 
         # total_size=1000: Takes 20 seconds to fill the queue
         # window_size=250: Detect changes based on the last 5 seconds of data
@@ -124,15 +125,18 @@ class RobotController:
         # Update Detector
         is_drift, p_val = self.detector.update(error)
         
+        self.p_values.append(p_val)
         if is_drift:
             print(f"!!! DOMAIN CHANGE DETECTED !!! p={p_val:.2e}.")
 
-        #if len(self.errors) == 500:
-        #    plt.hist(self.errors, bins=25, range=(0, 2))
-        #    plt.title("Error distribution on flat ground (Zoomed 0-2)")
-        #    plt.show()
+        if len(self.errors) % 500 == 0:
+            #plt.hist(self.errors, bins=25, range=(0, 2))
+            #plt.title("Error distribution on flat ground (Zoomed 0-2)")
+            plt.plot(-np.log10(self.p_values))
+            plt.title("log10(P-value) history")
+            plt.show()
 
-def interactive_visualization(env, inference_fn, controller=RobotController(), resetNum=-1):
+def interactive_visualization(env, jit_inference, controller=RobotController(), resetNum=-1):
     """
     Opens an interactive MuJoCo viewer for a JAX-based environment.
     
@@ -152,9 +156,12 @@ def interactive_visualization(env, inference_fn, controller=RobotController(), r
     data = mujoco.MjData(model)
     rng = jax.random.PRNGKey(0)
     
-    jit_reset = jax.jit(env.reset)
-    jit_step = jax.jit(env.step)
-    jit_inference = jax.jit(inference_fn)
+    if not hasattr(env, 'jit_reset'):
+        env.jit_reset = jax.jit(env.reset)
+        env.jit_step = jax.jit(env.step)
+
+    jit_reset = env.jit_reset
+    jit_step = env.jit_step
 
     # Initialize the Simulation State
     rng, key1 = jax.random.split(rng)
@@ -261,13 +268,14 @@ def main():
     params = checkpoint.load(checkpoint_path)
 
     inference_fn = make_inference_fn(params, deterministic=True)
+    jit_inference = jax.jit(inference_fn)
 
     controller = RobotController()
 
-    interactive_visualization(env, inference_fn, controller, resetNum=2)
-    interactive_visualization(rough_env, inference_fn, controller, resetNum=2)
-    interactive_visualization(env, inference_fn, controller, resetNum=2)
-    interactive_visualization(rough_env, inference_fn, controller, resetNum=2)
+    interactive_visualization(env, jit_inference, controller, resetNum=2)
+    interactive_visualization(rough_env, jit_inference, controller, resetNum=2)
+    interactive_visualization(env, jit_inference, controller, resetNum=2)
+    interactive_visualization(rough_env, jit_inference, controller, resetNum=2)
 
 if __name__ == "__main__":
     main()

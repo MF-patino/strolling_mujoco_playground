@@ -466,9 +466,9 @@ def main(argv):
   # Create inference function.
   inference_fn = make_inference_fn(params, deterministic=True)
 
-  interactive_visualization(eval_env, inference_fn)
-  
   jit_inference_fn = jax.jit(inference_fn)
+
+  interactive_visualization(eval_env, jit_inference_fn)
 
   # Run evaluation rollouts.
   def do_rollout(rng, state):
