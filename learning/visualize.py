@@ -21,37 +21,39 @@ import matplotlib.pyplot as plt
 
 from collections import deque
 from scipy.stats import ks_2samp
+from river.drift import ADWIN
 
 class KSDriftDetector:
-    def __init__(self, total_size=1000, window_size=250, p_threshold=1e-4):
+    def __init__(self, total_size=1000, window_size=250, adwin_delta=1e-3):
         """
-        A sliding window drift detector.
+        KS-based drift detector with ADWIN on the KS statistic.
 
         Args:
             total_size (int): Total buffer length (Reference + Window).
-                              e.g., 1000 steps = 20 seconds at 50Hz.
-            window_size (int): The size of the "Current" window to test.
-                               The 'Reference' size becomes (total_size - window_size).
-            p_threshold (float): Sensitivity. Lower = less sensitive.
+            window_size (int): Size of the current window.
+            adwin_delta (float): ADWIN confidence parameter.
+                                 Smaller = fewer false alarms.
         """
         self.buffer = deque(maxlen=total_size)
         self.window_size = window_size
-        self.p_threshold = p_threshold
         
         # Minimum samples needed before we start testing
         # We need at least full window + some reference
-        self.min_samples = window_size * 2 
+        self.min_samples = window_size * 2
+
+        # ADWIN monitors the statistic stream
+        self.adwin = ADWIN(delta=adwin_delta)
 
     def update(self, error_val):
         """
         Input: error_val (float)
-        Returns: is_drift (bool), p_value (float)
+        Returns: is_drift (bool), statistic (float)
         """
         self.buffer.append(error_val)
 
         # Check if we have enough data
         if len(self.buffer) < self.min_samples:
-            return False, 1.0
+            return False, 0.
 
         data = list(self.buffer)
         
@@ -61,14 +63,15 @@ class KSDriftDetector:
         window_data = data[-self.window_size:]
 
         # Run KS Test
-        _, pvalue = ks_2samp(reference_data, window_data)
+        statistic, _ = ks_2samp(reference_data, window_data)
+        
+        self.adwin.update(statistic)
+        is_drift = self.adwin.drift_detected
 
-        # Detection logic
-        # - pvalue < threshold: The distributions look different
-        # - mean(window) > mean(ref): The error got WORSE (we ignore if it gets better)
-        is_drift = (pvalue < self.p_threshold) and (np.mean(window_data) > np.mean(reference_data))
+        if is_drift:
+            self.adwin._reset()
 
-        return is_drift, pvalue
+        return is_drift, statistic
     
 def load_env(env_name, impl):
     env_cfg = registry.get_default_config(env_name)
@@ -99,11 +102,12 @@ class RobotController:
         
         # History for domain detection
         self.errors = []
-        self.p_values = []
+        self.stat_values = []
+        self.drift_indices = []
 
         # total_size=1000: Takes 20 seconds to fill the queue
         # window_size=250: Detect changes based on the last 5 seconds of data
-        self.detector = KSDriftDetector(total_size=1000, window_size=250, p_threshold=1e-3)
+        self.detector = KSDriftDetector(total_size=1000, window_size=250, adwin_delta=1e-2)
 
     def control_loop(self, obs, action, next_obs):
         # Predict what should have happened
@@ -123,18 +127,32 @@ class RobotController:
         self.errors.append(error)
         
         # Update Detector
-        is_drift, p_val = self.detector.update(error)
-        
-        self.p_values.append(p_val)
-        if is_drift:
-            print(f"!!! DOMAIN CHANGE DETECTED !!! p={p_val:.2e}.")
+        is_drift, statistic = self.detector.update(error)
 
-        if len(self.errors) % 500 == 0:
-            #plt.hist(self.errors, bins=25, range=(0, 2))
-            #plt.title("Error distribution on flat ground (Zoomed 0-2)")
-            plt.plot(-np.log10(self.p_values))
-            plt.title("log10(P-value) history")
-            plt.show()
+        if len(self.detector.buffer) >= self.detector.min_samples:
+            self.stat_values.append(statistic)
+            step = len(self.stat_values)
+
+            if is_drift:
+                idx = step - 1
+                self.drift_indices.append(idx)
+                print(f"!!! DOMAIN CHANGE DETECTED !!! statistic={statistic:.2e}.")
+
+            if step % 500 == 0:
+                #plt.hist(self.errors, bins=25, range=(0, 2))
+                #plt.title("Error distribution on flat ground (Zoomed 0-2)")
+                plt.plot(self.stat_values, label="KS statistic")
+
+                plt.vlines(self.drift_indices,
+                    ymin=min(self.stat_values),
+                    ymax=max(self.stat_values),
+                    color="red", alpha=0.6, label='Drift detection')
+
+                plt.xlabel("Time step")
+                plt.title("KS-ADWIN concept drift detector history")
+                plt.legend()
+                plt.tight_layout()
+                plt.show()
 
 def interactive_visualization(env, jit_inference, controller=RobotController(), resetNum=-1):
     """
