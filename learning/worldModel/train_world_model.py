@@ -14,12 +14,7 @@ LEARNING_RATE = 1e-4
 EARLY_STOP_EPOCHS = 40
 BATCH_SIZE = 512
 EPOCHS = 1000
-ENV_NAME = "Go2StrollFlatTerrain"
-#ENV_NAME = "Go2StrollRoughTerrain"
-root = f"world_models/{ENV_NAME}/"
-DATA_DIR = root + "world_model_dataset"
-MODEL_SAVE_PATH = root + "world_model_best.pkl"
-STATS_SAVE_PATH = root + "normalization_stats.pkl"
+ALL_ENVS = ["Go2StrollFlatTerrain", "Go2StrollRoughTerrain"]
 
 # Define the predictive part of the World Model, the MLP
 class WorldModelMLP(nn.Module):
@@ -86,9 +81,9 @@ def eval_step(state, batch_obs, batch_act, batch_next_obs):
     return jnp.mean((pred_delta - batch_next_obs) ** 2)
 
 # Data loading
-def load_dataset():
-    print(f"Loading data from {DATA_DIR}...")
-    files = glob.glob(os.path.join(DATA_DIR, "*.npz"))
+def load_dataset(datasetPath):
+    print(f"Loading data from {datasetPath}...")
+    files = glob.glob(os.path.join(datasetPath, "*.npz"))
     
     all_obs, all_act, all_next = [], [], []
     
@@ -107,10 +102,16 @@ def load_dataset():
     return X_obs, X_act, Y_next
     
 # Main training loop
-def main():
-    print(f"Training World Model for {ENV_NAME} environment")
+def trainWM(env_name):
+    root = f"world_models/{env_name}/"
+    datasetPath = root + "world_model_dataset"
+    modelPath = root + "world_model_best.pkl"
+    statsPath = root + "normalization_stats.pkl"
+
+    print("\n________________________________________________")
+    print(f"Training World Model for {env_name} environment")
     # Load data
-    obs_data, act_data, next_data = load_dataset()
+    obs_data, act_data, next_data = load_dataset(datasetPath)
     delta_data = next_data - obs_data
     num_samples = obs_data.shape[0]
     
@@ -146,7 +147,7 @@ def main():
     val_set = (obs[val_idx], act[val_idx], target[val_idx])
 
     # Save statistics for the robot
-    with open(STATS_SAVE_PATH, "wb") as f:
+    with open(statsPath, "wb") as f:
         pickle.dump({
             "obs_mean": obs_mean, "obs_std": obs_std,
             "act_mean": act_mean, "act_std": act_std,
@@ -187,12 +188,17 @@ def main():
         if avg_val < best_val_loss:
             worse_epochs = 0
             best_val_loss = avg_val
-            with open(MODEL_SAVE_PATH, "wb") as f:
+            with open(modelPath, "wb") as f:
                 pickle.dump(state.params, f)
         elif worse_epochs >= EARLY_STOP_EPOCHS:
             break
         else:
             worse_epochs += 1
+def main():
+    # All world models are trained from scratch
+    for env in ALL_ENVS:
+        trainWM(env)
+    
 
 if __name__ == "__main__":
     main()

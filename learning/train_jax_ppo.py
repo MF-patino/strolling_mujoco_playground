@@ -468,7 +468,7 @@ def main(argv):
 
   jit_inference_fn = jax.jit(inference_fn)
 
-  interactive_visualization(eval_env, jit_inference=jit_inference_fn)
+  interactive_visualization(eval_env, env_name=_ENV_NAME.value, jit_inference=jit_inference_fn)
 
   # Run evaluation rollouts.
   def do_rollout(rng, state):
