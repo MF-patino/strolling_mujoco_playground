@@ -14,9 +14,12 @@ LEARNING_RATE = 1e-4
 EARLY_STOP_EPOCHS = 40
 BATCH_SIZE = 512
 EPOCHS = 1000
-DATA_DIR = "world_model_dataset"
-MODEL_SAVE_PATH = "world_model_best.pkl"
-STATS_SAVE_PATH = "normalization_stats.pkl"
+ENV_NAME = "Go2StrollFlatTerrain"
+#ENV_NAME = "Go2StrollRoughTerrain"
+root = f"world_models/{ENV_NAME}/"
+DATA_DIR = root + "world_model_dataset"
+MODEL_SAVE_PATH = root + "world_model_best.pkl"
+STATS_SAVE_PATH = root + "normalization_stats.pkl"
 
 # Define the predictive part of the World Model, the MLP
 class WorldModelMLP(nn.Module):
@@ -105,6 +108,7 @@ def load_dataset():
     
 # Main training loop
 def main():
+    print(f"Training World Model for {ENV_NAME} environment")
     # Load data
     obs_data, act_data, next_data = load_dataset()
     delta_data = next_data - obs_data
@@ -142,7 +146,7 @@ def main():
     val_set = (obs[val_idx], act[val_idx], target[val_idx])
 
     # Save statistics for the robot
-    with open("normalization_stats.pkl", "wb") as f:
+    with open(STATS_SAVE_PATH, "wb") as f:
         pickle.dump({
             "obs_mean": obs_mean, "obs_std": obs_std,
             "act_mean": act_mean, "act_std": act_std,

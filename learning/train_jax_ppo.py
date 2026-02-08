@@ -436,7 +436,7 @@ def main(argv):
     env=eval_env,
     episode_length=ppo_params.episode_length,
     num_envs=64,
-    data_dir="world_model_dataset",
+    data_dir=f"world_models/{_ENV_NAME.value}/world_model_dataset",
     deterministic=False,
   )
 
@@ -468,7 +468,7 @@ def main(argv):
 
   jit_inference_fn = jax.jit(inference_fn)
 
-  interactive_visualization(eval_env, jit_inference_fn)
+  interactive_visualization(eval_env, jit_inference=jit_inference_fn)
 
   # Run evaluation rollouts.
   def do_rollout(rng, state):

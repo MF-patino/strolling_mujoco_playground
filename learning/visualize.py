@@ -23,6 +23,8 @@ from collections import deque
 from scipy.stats import ks_2samp
 from river.drift import ADWIN
 
+IMPL = "jax"
+
 class KSDriftDetector:
     def __init__(self, total_size=1000, window_size=250, adwin_delta=1e-3):
         """
@@ -88,9 +90,27 @@ def load_env(env_name, impl):
     return registry.load(env_name, config=env_cfg)
 
 # Work in progress controller for the robot
-# TODO: integrate the policy loading logic into the controller
 class RobotController:
-    def __init__(self):
+    def __init__(self, obs_shape, act_shape, env_name=None, checkpoint_path=None, jit_inference=None):
+        self.loadWorldModel()
+        if jit_inference is None:
+            self.loadPolicy(env_name, checkpoint_path, obs_shape, act_shape)
+        else:
+            self.inference = jit_inference
+        
+        # JIT compile the gradient descent logic
+        self.fast_update = jax.jit(train_step)
+        
+        # History for domain detection
+        self.errors = []
+        self.stat_values = []
+        self.drift_indices = []
+
+        # total_size=1000: Takes 20 seconds to fill the queue
+        # window_size=250: Detect changes based on the last 5 seconds of data
+        self.detector = KSDriftDetector(total_size=3000, window_size=250, adwin_delta=1e-2)
+
+    def loadWorldModel(self):
         # Load Pre-trained Weights
         with open(MODEL_SAVE_PATH, 'rb') as f:
             params = pickle.load(f)
@@ -104,19 +124,37 @@ class RobotController:
         rng = jax.random.PRNGKey(0)
         self.wm_state = create_train_state(rng, learning_rate=1e-5, sensor_dim=sensor_dim, action_dim=action_dim) # Low LR for stability
         self.wm_state = self.wm_state.replace(params=params)
-        
-        # JIT compile the gradient descent logic
-        self.fast_update = jax.jit(train_step)
-        
-        # History for domain detection
-        self.errors = []
-        self.stat_values = []
-        self.drift_indices = []
 
-        # total_size=1000: Takes 20 seconds to fill the queue
-        # window_size=250: Detect changes based on the last 5 seconds of data
-        self.detector = KSDriftDetector(total_size=1000, window_size=250, adwin_delta=1e-2)
+    def loadPolicy(self, env_name, checkpoint_path, obs_shape, act_shape):
+        # Load network topology
+        ppo_params = locomotion_params.brax_ppo_config(env_name, IMPL)
 
+        normalize = lambda x, y: x
+        if ppo_params.normalize_observations:
+            normalize = running_statistics.normalize
+
+        network_fn = (
+            ppo_networks.make_ppo_networks
+        )
+        if hasattr(ppo_params, "network_factory"):
+            network_factory = functools.partial(
+                network_fn, **ppo_params.network_factory
+            )
+        else:
+            network_factory = network_fn
+        
+        ppo_network = network_factory(
+            obs_shape, act_shape, preprocess_observations_fn=normalize
+        )
+
+        make_inference_fn = ppo_networks.make_inference_fn(ppo_network)
+
+        print(f"Loading weights from: {checkpoint_path}")
+        params = checkpoint.load(checkpoint_path)
+
+        inference_fn = make_inference_fn(params, deterministic=True)
+        self.inference = jax.jit(inference_fn)
+        
     def control_loop(self, obs, action, next_obs):
         # Predict what should have happened
 
@@ -161,7 +199,7 @@ class RobotController:
             plt.tight_layout()
             plt.show()
 
-def interactive_visualization(env, jit_inference, controller=RobotController(), resetNum=-1):
+def interactive_visualization(env, controller=None, resetNum=-1, jit_inference=None):
     """
     Opens an interactive MuJoCo viewer for a JAX-based environment.
     
@@ -170,6 +208,10 @@ def interactive_visualization(env, jit_inference, controller=RobotController(), 
         params: The trained policy parameters.
         inference_fn: The function make_inference_fn(params, deterministic=True).
     """
+
+    if controller is None:
+        obs_shape, act_shape = env.observation_size, env.action_size
+        controller = RobotController(obs_shape, act_shape, jit_inference=jit_inference)
 
     # Get the underlying standard MuJoCo model for the viewer
     if hasattr(env, 'mj_model'):
@@ -185,12 +227,9 @@ def interactive_visualization(env, jit_inference, controller=RobotController(), 
         env.jit_reset = jax.jit(env.reset)
         env.jit_step = jax.jit(env.step)
 
-    jit_reset = env.jit_reset
-    jit_step = env.jit_step
-
     # Initialize the Simulation State
     rng, key1 = jax.random.split(rng)
-    state = jit_reset(rng)
+    state = env.jit_reset(rng)
     
     reset_timer = 0
     control_dt = getattr(env, 'dt', model.opt.timestep)
@@ -210,7 +249,7 @@ def interactive_visualization(env, jit_inference, controller=RobotController(), 
             if reset_timer >= 10:
                 #print("Resetting")
                 rng, key1 = jax.random.split(rng)
-                state = jit_reset(rng)
+                state = env.jit_reset(rng)
                 reset_timer = 0
                 resetNum -= 1
 
@@ -224,11 +263,11 @@ def interactive_visualization(env, jit_inference, controller=RobotController(), 
             rng, act_rng = jax.random.split(rng)
             
             # Run Policy
-            action = jit_inference(state.obs, act_rng)[0]
+            action = controller.inference(state.obs, act_rng)[0]
 
             # Step environment
             prev_obs = state.obs["wm_state"]
-            state = jit_step(state, action)
+            state = env.jit_step(state, action)
             controller.control_loop(prev_obs, action, state.obs["wm_state"])
 
             # Ensure computation is done before we try to read it
@@ -259,48 +298,24 @@ def main():
 
     env_name = "Go2StrollFlatTerrain"
     checkpoint_path = "/home/marcos/Escritorio/mujoco_playground/logs/Go2StrollFlatTerrain-20260122-183735/checkpoints/000200540160"
-    impl = "jax"
+    #checkpoint_path = "/home/marcos/Escritorio/mujoco_playground/logs/Go2StrollRoughTerrain-20260208-001847/checkpoints/000200540160"
 
-    env = load_env(env_name, impl)
-    rough_env = load_env("Go2StrollRoughTerrain", impl)
+    env = load_env(env_name, IMPL)
+
+    env.jit_reset = jax.jit(env.reset)
+    env.jit_step = jax.jit(env.step)
+    rough_env = load_env("Go2StrollRoughTerrain", IMPL)
+    rough_env.jit_reset = jax.jit(rough_env.reset)
+    rough_env.jit_step = jax.jit(rough_env.step)
 
     obs_shape, act_shape = env.observation_size, env.action_size
 
-    # Load network topology
-    ppo_params = locomotion_params.brax_ppo_config(env_name, impl)
+    controller = RobotController(obs_shape, act_shape, env_name=env_name, checkpoint_path=checkpoint_path)
 
-    normalize = lambda x, y: x
-    if ppo_params.normalize_observations:
-        normalize = running_statistics.normalize
-
-    network_fn = (
-        ppo_networks.make_ppo_networks
-    )
-    if hasattr(ppo_params, "network_factory"):
-        network_factory = functools.partial(
-            network_fn, **ppo_params.network_factory
-        )
-    else:
-        network_factory = network_fn
-    
-    ppo_network = network_factory(
-      obs_shape, act_shape, preprocess_observations_fn=normalize
-    )
-
-    make_inference_fn = ppo_networks.make_inference_fn(ppo_network)
-
-    print(f"Loading weights from: {checkpoint_path}")
-    params = checkpoint.load(checkpoint_path)
-
-    inference_fn = make_inference_fn(params, deterministic=True)
-    jit_inference = jax.jit(inference_fn)
-
-    controller = RobotController()
-
-    interactive_visualization(env, jit_inference, controller, resetNum=2)
-    interactive_visualization(rough_env, jit_inference, controller, resetNum=2)
-    interactive_visualization(env, jit_inference, controller, resetNum=2)
-    interactive_visualization(rough_env, jit_inference, controller, resetNum=2)
+    interactive_visualization(env, controller=controller, resetNum=2)
+    interactive_visualization(rough_env, controller=controller, resetNum=2)
+    #interactive_visualization(env, controller=controller, resetNum=2)
+    #interactive_visualization(rough_env, controller=controller, resetNum=2)
 
 if __name__ == "__main__":
     main()
