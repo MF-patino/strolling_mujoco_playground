@@ -194,6 +194,7 @@ def trainWM(env_name):
             break
         else:
             worse_epochs += 1
+            
 def main():
     # All world models are trained from scratch
     for env in ALL_ENVS:

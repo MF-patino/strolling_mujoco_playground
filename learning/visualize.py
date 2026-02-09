@@ -110,7 +110,7 @@ class RobotController:
 
         # total_size=1000: Takes 20 seconds to fill the queue
         # window_size=250: Detect changes based on the last 5 seconds of data
-        self.detector = KSDriftDetector(total_size=3000, window_size=250, adwin_delta=1e-2)
+        self.detector = KSDriftDetector(total_size=1000, window_size=250, adwin_delta=1e-2)
 
     def loadWorldModels(self, initial_env):
         for env_name in ALL_ENVS:
@@ -120,20 +120,20 @@ class RobotController:
             with open(root + "world_model_best.pkl", 'rb') as f:
                 params = pickle.load(f)
             with open(root + "normalization_stats.pkl", 'rb') as f:
-                self.stats = pickle.load(f)
+                stats = pickle.load(f)
                 
-            sensor_dim = self.stats['obs_mean'].shape[0]
-            action_dim = self.stats['act_mean'].shape[0]
+            sensor_dim = stats['obs_mean'].shape[0]
+            action_dim = stats['act_mean'].shape[0]
 
             # Initialize training state (Optimizer)
             rng = jax.random.PRNGKey(0)
             wm_state = create_train_state(rng, learning_rate=1e-5, sensor_dim=sensor_dim, action_dim=action_dim) # Low LR for stability
-            self.wms.append((env_name, wm_state.replace(params=params)))
+            self.wms.append((env_name, wm_state.replace(params=params), stats))
 
             # The active world model is the one corresponding to the environment we launch the robot in
             if env_name == initial_env:
                 print(f"Starting up with {env_name} world model")
-                self.active_wm = self.wms[-1][1]
+                self.active_wm = self.wms[-1]
 
     def loadPolicy(self, env_name, checkpoint_path, obs_shape, act_shape):
         # Load network topology
@@ -165,20 +165,21 @@ class RobotController:
         inference_fn = make_inference_fn(params, deterministic=True)
         self.inference = jax.jit(inference_fn)
         
-    def getPredictionWM(self, wm, obs, action):
+    def getPredictionWM(self, wm, stats, obs, action):
         # Predict what should have happened
-        norm_obs = (obs - self.stats['obs_mean']) / self.stats['obs_std']
-        norm_act = (action - self.stats['act_mean']) / self.stats['act_std']
+        norm_obs = (obs - stats['obs_mean']) / stats['obs_std']
+        norm_act = (action - stats['act_mean']) / stats['act_std']
 
         norm_delta = wm.apply_fn(
             {'params': wm.params}, norm_obs, norm_act
         )
 
         # Denormalize to check error in real units (e.g. degrees per second)
-        return obs + (norm_delta * self.stats['delta_std']) + self.stats['delta_mean']
+        return obs + (norm_delta * stats['delta_std']) + stats['delta_mean']
     
     def control_loop(self, obs, action, next_obs):
-        pred_next_obs = self.getPredictionWM(self.active_wm, obs, action)
+        _, wm, stats = self.active_wm
+        pred_next_obs = self.getPredictionWM(wm, stats, obs, action)
         
         # Calculate error
         error = jp.mean((pred_next_obs - next_obs) ** 2)
@@ -194,7 +195,7 @@ class RobotController:
             idx = step - 1
             self.drift_indices.append(idx)
             print(f"!!! DOMAIN CHANGE DETECTED !!! statistic={statistic:.2e}.")
-            print([(name, jp.mean((self.getPredictionWM(wm, obs, action) - next_obs) ** 2)) for name, wm in self.wms])
+            print([(name, jp.mean((self.getPredictionWM(wm, stats, obs, action) - next_obs) ** 2)) for name, wm, stats in self.wms])
 
         if is_drift and step > self.detector.min_samples:
             #plt.hist(self.errors, bins=25, range=(0, 2))
@@ -323,6 +324,7 @@ def main():
 
     obs_shape, act_shape = env.observation_size, env.action_size
 
+    #env_name = "Go2StrollRoughTerrain"
     controller = RobotController(obs_shape, act_shape, env_name=env_name, checkpoint_path=checkpoint_path)
 
     interactive_visualization(env, controller=controller, resetNum=2)
