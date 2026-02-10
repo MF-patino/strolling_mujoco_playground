@@ -37,6 +37,7 @@ class KSDriftDetector:
                                  Smaller = fewer false alarms.
         """
         self.buffer = deque(maxlen=total_size)
+        self.stat_values = []
         self.window_size = window_size
         
         # Minimum samples needed before we start testing
@@ -55,6 +56,7 @@ class KSDriftDetector:
 
         # Check if we have enough data
         if len(self.buffer) < self.min_samples:
+            self.stat_values.append(0)
             return False, 0.
 
         data = list(self.buffer)
@@ -66,6 +68,10 @@ class KSDriftDetector:
 
         # Run KS Test
         statistic, _ = ks_2samp(reference_data, window_data)
+        alpha = 0.1
+        statistic = alpha * statistic + (1-alpha) * self.stat_values[-1]
+
+        self.stat_values.append(statistic)
         
         self.adwin.update(statistic)
         is_drift = self.adwin.drift_detected
@@ -105,12 +111,12 @@ class RobotController:
         
         # History for domain detection
         self.errors = []
-        self.stat_values = []
         self.drift_indices = []
 
         # total_size=1000: Takes 20 seconds to fill the queue
         # window_size=250: Detect changes based on the last 5 seconds of data
         self.detector = KSDriftDetector(total_size=1000, window_size=250, adwin_delta=1e-2)
+        self.buffer = deque(maxlen=100)
 
     def loadWorldModels(self, initial_env):
         for env_name in ALL_ENVS:
@@ -177,8 +183,20 @@ class RobotController:
         # Denormalize to check error in real units (e.g. degrees per second)
         return obs + (norm_delta * stats['delta_std']) + stats['delta_mean']
     
+    def meanErrorWM(self, wm, stats):
+        batch_obs, batch_act, batch_next = zip(*self.buffer)
+        
+        # Stack into JAX arrays (Shape: [Batch_Size, Dim])
+        obs_arr = jp.stack(batch_obs)
+        act_arr = jp.stack(batch_act)
+        next_arr = jp.stack(batch_next)
+        
+        return jp.mean((self.getPredictionWM(wm, stats, obs_arr, act_arr) - next_arr) ** 2)
+
     def control_loop(self, obs, action, next_obs):
-        _, wm, stats = self.active_wm
+        self.buffer.append((obs, action, next_obs))
+
+        active_name, wm, stats = self.active_wm
         pred_next_obs = self.getPredictionWM(wm, stats, obs, action)
         
         # Calculate error
@@ -188,23 +206,27 @@ class RobotController:
         # Update detector
         is_drift, statistic = self.detector.update(error)
 
-        self.stat_values.append(statistic)
-        step = len(self.stat_values)
+        step = len(self.detector.stat_values)
 
         if is_drift:
             idx = step - 1
             self.drift_indices.append(idx)
             print(f"!!! DOMAIN CHANGE DETECTED !!! statistic={statistic:.2e}.")
-            print([(name, jp.mean((self.getPredictionWM(wm, stats, obs, action) - next_obs) ** 2)) for name, wm, stats in self.wms])
+            
+            best = min([(self.meanErrorWM(wm, stats), name, wm, stats) for name, wm, stats in self.wms if name != active_name])
+            _, best_name, best_wm, best_stats = best
+
+            self.active_wm = (best_name, best_wm, best_stats)
+            print(f"Continuing with {best_name}.")
 
         if is_drift and step > self.detector.min_samples:
             #plt.hist(self.errors, bins=25, range=(0, 2))
             #plt.title("Error distribution on flat ground (Zoomed 0-2)")
-            plt.plot(self.stat_values, label="KS statistic")
+            plt.plot(self.detector.stat_values, label="KS statistic")
 
             plt.vlines(self.drift_indices,
-                ymin=min(self.stat_values),
-                ymax=max(self.stat_values),
+                ymin=min(self.detector.stat_values),
+                ymax=max(self.detector.stat_values),
                 color="red", alpha=0.6, label='Drift detection')
 
             plt.xlabel("Time step")
