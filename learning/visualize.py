@@ -22,6 +22,7 @@ import matplotlib.pyplot as plt
 from collections import deque
 from scipy.stats import ks_2samp
 from river.drift import ADWIN
+import os
 
 IMPL = "jax"
 
@@ -97,12 +98,14 @@ def load_env(env_name, impl):
 
 # Work in progress controller for the robot
 class RobotController:
-    def __init__(self, obs_shape, act_shape, env_name=None, checkpoint_path=None, jit_inference=None):
+    def __init__(self, obs_shape, act_shape, env_name=None, jit_inference=None):
         self.wms = []
+        self.policies = {}
+
         self.loadWorldModels(env_name)
 
         if jit_inference is None:
-            self.loadPolicy(env_name, checkpoint_path, obs_shape, act_shape)
+            self.loadPolicies(env_name, obs_shape, act_shape)
         else:
             self.inference = jit_inference
         
@@ -141,35 +144,43 @@ class RobotController:
                 print(f"Starting up with {env_name} world model")
                 self.active_wm = self.wms[-1]
 
-    def loadPolicy(self, env_name, checkpoint_path, obs_shape, act_shape):
-        # Load network topology
-        ppo_params = locomotion_params.brax_ppo_config(env_name, IMPL)
+    def loadPolicies(self, initial_env, obs_shape, act_shape):
+        basePath = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+        for env_name in ALL_ENVS:
+            checkpoint_path = basePath + f"/world_models/{env_name}/policy"
 
-        normalize = lambda x, y: x
-        if ppo_params.normalize_observations:
-            normalize = running_statistics.normalize
+            # Load network topology
+            ppo_params = locomotion_params.brax_ppo_config(env_name, IMPL)
 
-        network_fn = (
-            ppo_networks.make_ppo_networks
-        )
-        if hasattr(ppo_params, "network_factory"):
-            network_factory = functools.partial(
-                network_fn, **ppo_params.network_factory
+            normalize = lambda x, y: x
+            if ppo_params.normalize_observations:
+                normalize = running_statistics.normalize
+
+            network_fn = (
+                ppo_networks.make_ppo_networks
             )
-        else:
-            network_factory = network_fn
-        
-        ppo_network = network_factory(
-            obs_shape, act_shape, preprocess_observations_fn=normalize
-        )
+            if hasattr(ppo_params, "network_factory"):
+                network_factory = functools.partial(
+                    network_fn, **ppo_params.network_factory
+                )
+            else:
+                network_factory = network_fn
+            
+            ppo_network = network_factory(
+                obs_shape, act_shape, preprocess_observations_fn=normalize
+            )
 
-        make_inference_fn = ppo_networks.make_inference_fn(ppo_network)
+            make_inference_fn = ppo_networks.make_inference_fn(ppo_network)
 
-        print(f"Loading weights from: {checkpoint_path}")
-        params = checkpoint.load(checkpoint_path)
+            print(f"Loading weights from: {checkpoint_path}")
+            params = checkpoint.load(checkpoint_path)
 
-        inference_fn = make_inference_fn(params, deterministic=True)
-        self.inference = jax.jit(inference_fn)
+            inference_fn = make_inference_fn(params, deterministic=True)
+            self.policies[env_name] = jax.jit(inference_fn)
+
+        # The active policy is the one corresponding to the environment we launch the robot in
+        print(f"Starting up with {initial_env} policy")
+        self.inference = self.policies[initial_env]
         
     def getPredictionWM(self, wm, stats, obs, action):
         # Predict what should have happened
@@ -212,11 +223,12 @@ class RobotController:
             idx = step - 1
             self.drift_indices.append(idx)
             print(f"!!! DOMAIN CHANGE DETECTED !!! statistic={statistic:.2e}.")
-            
+
             best = min([(self.meanErrorWM(wm, stats), name, wm, stats) for name, wm, stats in self.wms if name != active_name])
             _, best_name, best_wm, best_stats = best
 
             self.active_wm = (best_name, best_wm, best_stats)
+            self.inference = self.policies[best_name]
             print(f"Continuing with {best_name}.")
 
         if is_drift and step > self.detector.min_samples:
@@ -333,7 +345,7 @@ def main():
     '''
 
     env_name = "Go2StrollFlatTerrain"
-    checkpoint_path = "/home/marcos/Escritorio/mujoco_playground/logs/Go2StrollFlatTerrain-20260122-183735/checkpoints/000200540160"
+    #checkpoint_path = "/home/marcos/Escritorio/mujoco_playground/logs/Go2StrollFlatTerrain-20260122-183735/checkpoints/000200540160"
     #checkpoint_path = "/home/marcos/Escritorio/mujoco_playground/logs/Go2StrollRoughTerrain-20260208-001847/checkpoints/000200540160"
 
     env = load_env(env_name, IMPL)
@@ -347,7 +359,7 @@ def main():
     obs_shape, act_shape = env.observation_size, env.action_size
 
     #env_name = "Go2StrollRoughTerrain"
-    controller = RobotController(obs_shape, act_shape, env_name=env_name, checkpoint_path=checkpoint_path)
+    controller = RobotController(obs_shape, act_shape, env_name=env_name)
 
     interactive_visualization(env, controller=controller, resetNum=2)
     interactive_visualization(rough_env, controller=controller, resetNum=2)
