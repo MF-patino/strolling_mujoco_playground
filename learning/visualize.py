@@ -87,7 +87,7 @@ class KSDriftDetector:
     # In this method, the reference data is cleared and the adwin detector is also reset
     def reset(self, data):
         self.buffer.clear()
-        self.buffer.extend(data[-self.window_size:])
+        #self.buffer.extend(data[-self.window_size:])
         self.adwin._reset()
     
 def load_env(env_name, impl):
@@ -98,17 +98,24 @@ def load_env(env_name, impl):
 
 # Work in progress controller for the robot
 class RobotController:
-    def __init__(self, obs_shape, act_shape, env_name=None, jit_inference=None):
+    def __init__(self, obs_shape, act_shape, initial_env=None, jit_inference=None):
         self.wms = []
         self.policies = {}
 
-        self.loadWorldModels(env_name)
+        # If a single inference (policy) is given, then we don't deploy the full
+        # online adaptation system
+        self.deploy = jit_inference is None
 
-        if jit_inference is None:
-            self.loadPolicies(env_name, obs_shape, act_shape)
-        else:
+        if jit_inference is not None:
             self.inference = jit_inference
         
+        if not self.deploy:
+            return
+        
+        self.loadPolicies(initial_env, obs_shape, act_shape)
+        self.loadWorldModels(initial_env)
+        print(f"Starting up with {initial_env} world model & policy.")
+
         # JIT compile the gradient descent logic
         self.fast_update = jax.jit(train_step)
         
@@ -118,8 +125,9 @@ class RobotController:
 
         # total_size=1000: Takes 20 seconds to fill the queue
         # window_size=250: Detect changes based on the last 5 seconds of data
-        self.detector = KSDriftDetector(total_size=1000, window_size=250, adwin_delta=1e-2)
-        self.buffer = deque(maxlen=100)
+        window_size = 100
+        self.detector = KSDriftDetector(total_size=1000, window_size=window_size, adwin_delta=1e-2)
+        self.buffer = deque(maxlen=window_size)
 
     def loadWorldModels(self, initial_env):
         for env_name in ALL_ENVS:
@@ -141,7 +149,6 @@ class RobotController:
 
             # The active world model is the one corresponding to the environment we launch the robot in
             if env_name == initial_env:
-                print(f"Starting up with {env_name} world model")
                 self.active_wm = self.wms[-1]
 
     def loadPolicies(self, initial_env, obs_shape, act_shape):
@@ -179,7 +186,6 @@ class RobotController:
             self.policies[env_name] = jax.jit(inference_fn)
 
         # The active policy is the one corresponding to the environment we launch the robot in
-        print(f"Starting up with {initial_env} policy")
         self.inference = self.policies[initial_env]
         
     def getPredictionWM(self, wm, stats, obs, action):
@@ -194,7 +200,7 @@ class RobotController:
         # Denormalize to check error in real units (e.g. degrees per second)
         return obs + (norm_delta * stats['delta_std']) + stats['delta_mean']
     
-    def meanErrorWM(self, wm, stats):
+    def getMetricWM(self, wm, stats):
         batch_obs, batch_act, batch_next = zip(*self.buffer)
         
         # Stack into JAX arrays (Shape: [Batch_Size, Dim])
@@ -202,9 +208,16 @@ class RobotController:
         act_arr = jp.stack(batch_act)
         next_arr = jp.stack(batch_next)
         
-        return jp.mean((self.getPredictionWM(wm, stats, obs_arr, act_arr) - next_arr) ** 2)
+        #return jp.mean((self.getPredictionWM(wm, stats, obs_arr, act_arr) - next_arr) ** 2)
+        statistic, _ = ks_2samp(next_arr.reshape(-1), self.getPredictionWM(wm, stats, obs_arr, act_arr).reshape(-1))
+        return statistic
 
     def control_loop(self, obs, action, next_obs):
+        if not self.deploy:
+            return
+        
+        obs, next_obs = obs["wm_state"], next_obs["wm_state"]
+        
         self.buffer.append((obs, action, next_obs))
 
         active_name, wm, stats = self.active_wm
@@ -218,13 +231,19 @@ class RobotController:
         is_drift, statistic = self.detector.update(error)
 
         step = len(self.detector.stat_values)
+        
+        #if step % 100 == 0:
+        #    wm_info = [(self.getMetricWM(wm, stats), name, wm, stats) for name, wm, stats in self.wms] #if name != active_name]
+        #    print([(error, name) for error, name, _, _ in wm_info])
 
         if is_drift:
             idx = step - 1
             self.drift_indices.append(idx)
             print(f"!!! DOMAIN CHANGE DETECTED !!! statistic={statistic:.2e}.")
 
-            best = min([(self.meanErrorWM(wm, stats), name, wm, stats) for name, wm, stats in self.wms if name != active_name])
+            wm_info = [(self.getMetricWM(wm, stats), name, wm, stats) for name, wm, stats in self.wms if name != active_name]
+            #print([(error, name) for error, name, _, _ in wm_info])
+            best = min(wm_info)
             _, best_name, best_wm, best_stats = best
 
             self.active_wm = (best_name, best_wm, best_stats)
@@ -314,9 +333,9 @@ def interactive_visualization(env, controller=None, resetNum=-1, jit_inference=N
             action = controller.inference(state.obs, act_rng)[0]
 
             # Step environment
-            prev_obs = state.obs["wm_state"]
+            prev_obs = state.obs
             state = env.jit_step(state, action)
-            controller.control_loop(prev_obs, action, state.obs["wm_state"])
+            controller.control_loop(prev_obs, action, state.obs)
 
             # Ensure computation is done before we try to read it
             state.data.qpos.block_until_ready()
@@ -358,10 +377,9 @@ def main():
 
     obs_shape, act_shape = env.observation_size, env.action_size
 
-    #env_name = "Go2StrollRoughTerrain"
-    controller = RobotController(obs_shape, act_shape, env_name=env_name)
+    controller = RobotController(obs_shape, act_shape, initial_env="Go2StrollFlatTerrain")
 
-    interactive_visualization(env, controller=controller, resetNum=2)
+    interactive_visualization(env, controller=controller, resetNum=1)
     interactive_visualization(rough_env, controller=controller, resetNum=2)
     interactive_visualization(env, controller=controller, resetNum=2)
     interactive_visualization(rough_env, controller=controller, resetNum=2)
