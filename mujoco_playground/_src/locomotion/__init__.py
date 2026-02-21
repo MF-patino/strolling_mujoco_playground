@@ -85,6 +85,12 @@ _envs = {
     "Go2StrollRoughTerrain": functools.partial(
         go2_stroll.Stroll, task="rough_terrain"
     ),
+    "Go2StrollSlipperyTerrain": functools.partial(
+        go2_stroll.Stroll, task="slippery_terrain"
+    ),
+    "Go2StrollStairs": functools.partial(
+        go2_stroll.Stroll, task="stairs"
+    ),
     "Go2Getup": go2_getup.Getup,
     "Go2Handstand": go2_handstand.Handstand,
     "Go2Footstand": go2_handstand.Footstand,
@@ -126,6 +132,8 @@ _cfgs = {
     "Go2JoystickRoughTerrain": go2_joystick.default_config,
     "Go2StrollFlatTerrain": go2_stroll.default_config,
     "Go2StrollRoughTerrain": go2_stroll.default_config,
+    "Go2StrollSlipperyTerrain": go2_stroll.default_config,
+    "Go2StrollStairs": go2_stroll.default_config,
     "Go2Getup": go2_getup.default_config,
     "Go2Handstand": go2_handstand.default_config,
     "Go2Footstand": go2_handstand.default_config,
@@ -157,6 +165,8 @@ _randomizer = {
     "Go2JoystickRoughTerrain": go2_randomize.domain_randomize,
     "Go2StrollFlatTerrain": go2_randomize.domain_randomize,
     "Go2StrollRoughTerrain": go2_randomize.domain_randomize,
+    "Go2StrollSlipperyTerrain": go2_randomize.domain_randomize,
+    "Go2StrollStairs": go2_randomize.domain_randomize,
     "Go2Getup": go2_randomize.domain_randomize,
     "Go2Handstand": go2_randomize.domain_randomize,
     "Go2Footstand": go2_randomize.domain_randomize,
