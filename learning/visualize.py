@@ -94,7 +94,12 @@ def load_env(env_name, impl):
     env_cfg = registry.get_default_config(env_name)
     env_cfg["impl"] = impl
 
-    return registry.load(env_name, config=env_cfg)
+    env = registry.load(env_name, config=env_cfg)
+
+    env.jit_reset = jax.jit(env.reset)
+    env.jit_step = jax.jit(env.step)
+
+    return env
 
 # Work in progress controller for the robot
 class RobotController:
@@ -368,21 +373,23 @@ def main():
     #checkpoint_path = "/home/marcos/Escritorio/mujoco_playground/logs/Go2StrollRoughTerrain-20260208-001847/checkpoints/000200540160"
 
     env = load_env(env_name, IMPL)
-    env.jit_reset = jax.jit(env.reset)
-    env.jit_step = jax.jit(env.step)
-
     rough_env = load_env("Go2StrollRoughTerrain", IMPL)
-    rough_env.jit_reset = jax.jit(rough_env.reset)
-    rough_env.jit_step = jax.jit(rough_env.step)
+    #stairs_env = load_env("Go2StrollStairs", IMPL)
+    slippery_env = load_env("Go2StrollSlipperyTerrain", IMPL)
+
+    # TODO:
+    # Cambio entre 3 WMs diferentes (top k + probarlos)
+    # Entrenar rugoso desde llano
+    # Comprobar que funciona en el G1
 
     obs_shape, act_shape = env.observation_size, env.action_size
 
     controller = RobotController(obs_shape, act_shape, initial_env="Go2StrollFlatTerrain")
 
     interactive_visualization(env, controller=controller, resetNum=1)
-    interactive_visualization(rough_env, controller=controller, resetNum=2)
-    interactive_visualization(env, controller=controller, resetNum=2)
-    interactive_visualization(rough_env, controller=controller, resetNum=2)
+    interactive_visualization(slippery_env, controller=controller, resetNum=1)
+    interactive_visualization(env, controller=controller, resetNum=1)
+    interactive_visualization(rough_env, controller=controller, resetNum=1)
 
 if __name__ == "__main__":
     main()

@@ -14,7 +14,7 @@ LEARNING_RATE = 1e-4
 EARLY_STOP_EPOCHS = 40
 BATCH_SIZE = 512
 EPOCHS = 1000
-ALL_ENVS = ["Go2StrollFlatTerrain", "Go2StrollRoughTerrain"]
+ALL_ENVS = ["Go2StrollSlipperyTerrain", "Go2StrollFlatTerrain", "Go2StrollRoughTerrain"]
 
 # Define the predictive part of the World Model, the MLP
 class WorldModelMLP(nn.Module):
