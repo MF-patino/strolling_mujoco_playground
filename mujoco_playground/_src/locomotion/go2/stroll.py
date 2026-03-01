@@ -50,8 +50,6 @@ def default_config() -> config_dict.ConfigDict:
       ),
       reward_config=config_dict.create(
           scales=config_dict.create(
-              lin_vel_x=1.0,
-              lin_vel_y=-1.0,
               # Tracking.
               tracking_lin_vel=1.5,
               tracking_ang_vel=0.5,
@@ -417,8 +415,6 @@ class Stroll(go2_base.Go2Env):
   ) -> dict[str, jax.Array]:
     del metrics  # Unused.
     return {
-        #"lin_vel_x": self._reward_lin_vel_x(info["command"], self.get_local_linvel(data)),
-        #"lin_vel_y": self._cost_lin_vel_y(self.get_local_linvel(data)),
         "tracking_lin_vel": self._reward_tracking_lin_vel(info["command"], self.get_local_linvel(data)),
         "tracking_ang_vel": self._reward_tracking_ang_vel(info["command"], self.get_gyro(data)),
         "lin_vel_z": self._cost_lin_vel_z(self.get_global_linvel(data)), # Penalize moving in z axis
@@ -438,21 +434,7 @@ class Stroll(go2_base.Go2Env):
         #"feet_air_time": self._reward_feet_air_time(info["feet_air_time"], first_contact, info["command"]),
         "dof_pos_limits": self._cost_joint_pos_limits(data.qpos[7:]),
     }
-
-  def _reward_lin_vel_x(self, commands, local_vel) -> jax.Array:
-    # Reward x axis linear velocity until desired velocity has been reached.
-    '''critical_vel = .5
-    one = (local_vel[0] > critical_vel) * jp.min(jp.array([local_vel[0], commands[0]]))/critical_vel
-
-    lin_vel_error = jp.square(critical_vel - local_vel[0])
-    two = (local_vel[0] <= critical_vel) * jp.exp(-lin_vel_error / self._config.reward_config.tracking_sigma)'''
-
-    return jp.min(jp.array([local_vel[0], commands[0]]))
-
-  def _cost_lin_vel_y(self, local_vel) -> jax.Array:
-    # Penalize y axis linear velocity.
-    return jp.square(local_vel[1])
-
+  
   # Tracking rewards.
 
   def _reward_tracking_lin_vel(
