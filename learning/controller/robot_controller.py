@@ -1,6 +1,7 @@
 from brax.training.agents.ppo import networks as ppo_networks
 import functools
 
+import numpy as np
 import jax
 import jax.numpy as jp
 from brax.training.acme import running_statistics
@@ -11,12 +12,14 @@ import matplotlib
 matplotlib.use('TkAgg') 
 import matplotlib.pyplot as plt
 
-from worldModel.train_world_model import create_train_state, train_step, ALL_ENVS
+from worldModel.train_world_model import create_train_state, train_step, load_dataset, ALL_ENVS
 import os
 import pickle
 from collections import deque
 from controller.ks_detector import KSDriftDetector
 
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import RBF
 IMPL = "jax"
 
 # Work in progress controller for the robot
@@ -40,6 +43,14 @@ class RobotController:
         self.loadWorldModels(initial_env)
         print(f"Starting up with {initial_env} world model & policy.")
 
+        self.policy_embeddings = {
+            name: self.computePolicyEmbedding(name) for name in ALL_ENVS
+        }
+
+        print(f"Policy embeddings:")
+        for pol_name in self.policy_embeddings:
+            print(f"{pol_name}: {self.policy_embeddings[pol_name]}")
+
         # JIT compile the gradient descent logic
         self.fast_update = jax.jit(train_step)
         
@@ -53,7 +64,7 @@ class RobotController:
         self.detector = KSDriftDetector(total_size=1000, window_size=window_size, adwin_delta=5e-2)
         self.buffer = deque(maxlen=window_size)
         
-        self.to_sample = None
+        self.wms2sample = None
 
     def loadWorldModels(self, initial_env):
         self.wm_dict = {}
@@ -128,28 +139,51 @@ class RobotController:
 
         # Denormalize to check error in real units (e.g. degrees per second)
         return obs + (norm_delta * stats['delta_std']) + stats['delta_mean']
-    
-    def getMetricWM(self, wm, stats):
-        batch_obs, batch_act, batch_next = zip(*self.buffer)
-        
-        # Stack into JAX arrays (Shape: [Batch_Size, Dim])
-        obs_arr = jp.stack(batch_obs)
-        act_arr = jp.stack(batch_act)
-        next_arr = jp.stack(batch_next)
-        
-        return jp.mean((self.getPredictionWM(wm, stats, obs_arr, act_arr) - next_arr) ** 2)
 
     def getErrorWM(self, name, wm, stats, obs, action, next_obs):
         pred_next_obs = self.getPredictionWM(wm, stats, obs, action)
         
         # Calculate error
-        error = jp.mean((pred_next_obs - next_obs) ** 2)
+        error = jp.mean(jp.square(pred_next_obs - next_obs))
         alpha = 0.1
         smooth_error = error if len(self.errors[name]) == 0 else alpha * error + (1-alpha) * self.errors[name][-1]
         
         self.errors[name].append(smooth_error)
 
         return error
+
+    def computePolicyEmbedding(self, env_name):
+        '''
+        The embeddings of a policy are its affinity coefficients to each environment.
+        '''
+
+        root = f"world_models/{env_name}/"
+        datasetPath = root + "world_model_dataset"
+
+        # Load data
+        obs_data, act_data, next_data = load_dataset(datasetPath)
+
+        mean_errors = jp.array([
+            jp.sqrt(jp.mean(jp.square(self.getPredictionWM(wm, stats, obs_data, act_data) - next_data)))
+            for _, wm, stats in self.wms
+        ])
+
+        env_index = ALL_ENVS.index(env_name)
+        # Compute the extra "surprise" by subtracting the baseline noise
+        embedding = jp.abs(mean_errors - mean_errors[env_index])
+        # Normalization
+        embedding = embedding / jp.linalg.norm(embedding)
+        
+        return embedding
+        
+    def predictPolicyScore(self, name):
+        # GP predicts the expected reward (negative error) and uncertainty
+        mean, std = self.gp.predict([self.policy_embeddings[name]], return_std=True)
+                        
+        # UCB formula: Exploit (mean) + Explore (Kappa * std)
+        kappa = 2.0 
+        lcb_score = mean[0] + kappa * std[0]
+        return lcb_score, mean, std
 
     def control_loop(self, obs, action, next_obs):
         if not self.deploy:
@@ -159,52 +193,80 @@ class RobotController:
         
         self.buffer.append((obs, action, next_obs))
 
-        # TODO: implement Multi-Armed Bandit with policy embeddings
-        if self.to_sample is not None:
+        if self.wms2sample is not None:
             prev_name = self.active_wm[0]
             self.active_wm = None
-            for try_wm in self.to_sample:
+            for try_wm in self.wms2sample:
                 name = try_wm[0]
                 sample_num = len(self.sampled_errors[name])
                 if sample_num < self.samples2collect[name]:
                     if prev_name != name:
                         print(f"Sampling {name}.")
+
                     self.active_wm = try_wm
                     self.inference = self.policies[name]
                     break
 
             if self.active_wm is None:
-                # Determine the policy that garnered more success (lowest mean WM error)
-                errs = [(jp.mean(jp.array(self.sampled_errors[name])), name) for name in self.sampled_errors]
-                best_err, best_name = min(errs)
-
                 if self.iteration < self.max_iterations:
+                    # Fit the GP with the new real-world data
+                    noise = 1e-06
+                    self.gp = GaussianProcessRegressor(kernel=RBF(), normalize_y=True, alpha=self.alpha+noise)
+                    self.gp.fit(self.X_train, self.y_train)
+
+                    best_ucb = float('inf')
+                    next_name = None
+                    
+                    for name in self.policies.keys():
+                        lcb_score, mean, std = self.predictPolicyScore(name)
+                        print(f"{name} Mean: {mean[0]}±{std[0]}. Score {lcb_score}")
+                        
+                        if lcb_score < best_ucb:
+                            best_ucb = lcb_score
+                            next_name = name
+
+                    # Forget data that will be stale in the next iteration
+                    # As the policy chosen by the GP will be resampled, the mean error and std will change
+                    mask = (self.X_train != self.policy_embeddings[next_name]).any(axis=1)
+                    self.X_train, self.y_train, self.alpha = self.X_train[mask], self.y_train[mask], self.alpha[mask]
+
                     # Update rule: collect more samples of a policy that improves WM error (to stabilize the robot)
                     # Also, don't collect more samples of policies that increase WM error (as it destabilizes the robot)
                     
                     # We collect more samples of a promising policy to give us more evidence in favour or to the contrary
                     # that the policy is actually better than the rest
-                    delta = lambda err: 15 if err == best_err else 0
-                    self.samples2collect = {name: int(self.samples2collect[name] + delta(err)) for err, name in errs}
-                    
-                    self.active_wm = [(name, wm, stats) for name, wm, stats in self.to_sample if len(self.sampled_errors[name]) < self.samples2collect[name]][0]
-                    next_name = self.active_wm[0]
+                    self.samples2collect[next_name] += 15
+
+                    self.active_wm = self.wm_dict[next_name]
                     self.inference = self.policies[next_name]
                     self.iteration += 1
 
                     print(f"Beginning iteration {self.iteration} with {next_name}.")
                 else:
+                    # Determine the policy that garnered more success (lowest mean WM error)
+                    errs = [(jp.mean(jp.array(self.sampled_errors[name])), name) for name in self.sampled_errors]
+                    best_err, best_name = min(errs)
+
                     print(f"Converged on {best_name}.")
                     self.active_wm = self.wm_dict[best_name]
                     self.inference = self.policies[best_name]
-                    self.to_sample = None
+                    self.wms2sample = None
 
         active_name, wm, stats = self.active_wm
         error = self.getErrorWM(active_name, wm, stats, obs, action, next_obs)
         #[self.getErrorWM(name, wm, stats, obs, action, next_obs) for name, wm, stats in self.wms if name != active_name]
 
-        if self.to_sample is not None:
+        if self.wms2sample is not None:
             self.sampled_errors[active_name].append(error)
+
+            # When sampling batch is over for the policy, compute its new GP datapoint
+            if len(self.sampled_errors[active_name]) == self.samples2collect[active_name]:
+                samples = jp.array(self.sampled_errors[active_name])
+
+                self.X_train = np.vstack([self.X_train, self.policy_embeddings[active_name]])
+                self.y_train = np.append(self.y_train, jp.mean(samples))
+                self.alpha = np.append(self.alpha, jp.var(samples)/len(samples))
+
             return
         
         # Update detector
@@ -216,28 +278,33 @@ class RobotController:
             idx = step - 1
             self.drift_indices.append(idx)
             print(f"!!! DOMAIN CHANGE DETECTED !!! statistic={statistic:.2e}.")
+            self.sampled_errors = {name: [] for name, _, _ in self.wms}
 
-            wm_info = [(self.getMetricWM(wm, stats), name, wm, stats) for name, wm, stats in self.wms if name != active_name]
-            #print([(error, name) for error, name, _, _ in wm_info])
-
-            # We sort by mean WM error (this implicitly sorts the policies in relation to their similarity
-            # with the active policy)
-            self.to_sample = [self.active_wm] + [(name, wm, stats) for _, name, wm, stats in sorted(wm_info)]
-            self.sampled_errors = {name: [] for name, _, _ in self.to_sample}
-
-            # All policies are safely sampled 15 times (.3 seconds) initially. 
+            # Policies are safely sampled 15 times (.3 seconds) initially. 
             # 20 (.4 seconds) is too much for slippery in rough terrain: robot falls.
             self.initial_samples = 15
 
             # Assign last obtained errors so that we may be able to compare other policies
             # against the originally active one without having to roll it out
-            self.sampled_errors[active_name] = self.errors[active_name][-self.initial_samples:]
+            samples = self.errors[active_name][-self.initial_samples:]
+            self.sampled_errors[active_name] = samples
+
+            self.X_train = self.policy_embeddings[active_name]
+            samples = jp.array(samples)
+            self.y_train = np.array([jp.mean(samples)])
+            self.alpha = np.array([jp.var(samples)/len(samples)])
 
             # When checking out different policies, the amount of samples to collect of each
-            self.samples2collect = {name: self.initial_samples for name, _, _ in self.to_sample}
+            self.samples2collect = {name: self.initial_samples for name, _, _ in self.wms}
             self.iteration = 1
             # Should converge after 5 iterations
             self.max_iterations = 5
+
+            # We need to deploy the policies in order of similarity to the active policy.
+            # With this, the cost of transitioning from one to the next is lower.
+            # If not, the robot may switch directly from flat to slippery on rough terrain, falling over.
+            dists_pols = [(jp.linalg.norm(self.policy_embeddings[pol_name] - self.policy_embeddings[active_name]), pol_name) for pol_name in self.policies.keys()]
+            self.wms2sample = [self.wm_dict[name] for _, name in sorted(dists_pols)]
 
         if is_drift and step > self.detector.min_samples:
             '''for wm_name in self.errors:
