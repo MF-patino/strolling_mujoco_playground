@@ -42,6 +42,7 @@ from mujoco_playground.config import manipulation_params
 import tensorboardX
 import wandb
 from worldModel.rollout_saver import WorldModelRolloutSaver
+from worldModel.common import WM_DS_PATH
 from visualize import interactive_visualization
 
 xla_flags = os.environ.get("XLA_FLAGS", "")
@@ -436,7 +437,7 @@ def main(argv):
     env=eval_env,
     episode_length=ppo_params.episode_length,
     num_envs=64,
-    data_dir=f"world_models/{_ENV_NAME.value}/world_model_dataset",
+    data_dir=WM_DS_PATH.format(env_name=_ENV_NAME.value),
     deterministic=False,
   )
 

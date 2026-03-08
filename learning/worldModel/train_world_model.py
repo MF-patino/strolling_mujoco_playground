@@ -8,13 +8,14 @@ import os
 import glob
 import pickle
 
+from worldModel.common import WM_DS_PATH, WM_PATH, WM_STATS_PATH, ALL_ENVS
+
 # Configuration
 HIDDEN_DIMS = [512, 256, 128]
 LEARNING_RATE = 1e-4
 EARLY_STOP_EPOCHS = 40
 BATCH_SIZE = 512
 EPOCHS = 1000
-ALL_ENVS = ["Go2StrollSlipperyTerrain", "Go2StrollFlatTerrain", "Go2StrollRoughTerrain"]
 
 # Define the predictive part of the World Model, the MLP
 class WorldModelMLP(nn.Module):
@@ -103,10 +104,9 @@ def load_dataset(datasetPath):
     
 # Main training loop
 def trainWM(env_name):
-    root = f"world_models/{env_name}/"
-    datasetPath = root + "world_model_dataset"
-    modelPath = root + "world_model_best.pkl"
-    statsPath = root + "normalization_stats.pkl"
+    datasetPath = WM_DS_PATH.format(env_name=env_name)
+    modelPath = WM_PATH.format(env_name=env_name)
+    statsPath = WM_STATS_PATH.format(env_name=env_name)
 
     print("\n________________________________________________")
     print(f"Training World Model for {env_name} environment")

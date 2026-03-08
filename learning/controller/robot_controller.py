@@ -12,7 +12,9 @@ import matplotlib
 matplotlib.use('TkAgg') 
 import matplotlib.pyplot as plt
 
-from worldModel.train_world_model import create_train_state, train_step, load_dataset, ALL_ENVS
+from worldModel.common import ALL_ENVS, WM_PATH, WM_STATS_PATH, WM_DS_PATH, POL_PATH
+from worldModel.train_world_model import create_train_state, train_step, load_dataset
+
 import os
 import pickle
 from collections import deque
@@ -77,12 +79,10 @@ class RobotController:
         self.wm_dict = {}
 
         for env_name in ALL_ENVS:
-            root = f"world_models/{env_name}/"
-
             # Load Pre-trained Weights
-            with open(root + "world_model_best.pkl", 'rb') as f:
+            with open(WM_PATH.format(env_name=env_name), 'rb') as f:
                 params = pickle.load(f)
-            with open(root + "normalization_stats.pkl", 'rb') as f:
+            with open(WM_STATS_PATH.format(env_name=env_name), 'rb') as f:
                 stats = pickle.load(f)
                 
             sensor_dim = stats['obs_mean'].shape[0]
@@ -101,7 +101,7 @@ class RobotController:
     def loadPolicies(self, initial_env, obs_shape, act_shape):
         basePath = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
         for env_name in ALL_ENVS:
-            checkpoint_path = basePath + f"/world_models/{env_name}/policy"
+            checkpoint_path = basePath + "/" + POL_PATH.format(env_name=env_name)
 
             # Load network topology
             ppo_params = locomotion_params.brax_ppo_config(env_name, IMPL)
@@ -164,8 +164,7 @@ class RobotController:
         The embeddings of a policy are its affinity coefficients to each environment.
         '''
 
-        root = f"world_models/{env_name}/"
-        datasetPath = root + "world_model_dataset"
+        datasetPath = WM_DS_PATH.format(env_name=env_name)
 
         # Load data
         obs_data, act_data, next_data = load_dataset(datasetPath)
