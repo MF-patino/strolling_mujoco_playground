@@ -27,14 +27,26 @@ This fork of Mujoco Playground provides a general framework for online adaptatio
 
 ## Usage
 
-The usage command differ in the case of using the library rscope to visualize training results or not.
+### For deployment and visualization
 
-Commands without rscope:
+* For deploying the online policy-WM pair adaptation stack:
+    ```sh 
+    python learning/visualize_adaptation.py
+    ```
 * Visualizing a policy in its native environment: 
     ```sh 
     python learning/train_jax_ppo.py --env_name [env_name] --play_only=True --load_checkpoint_path [checkpoint_path]
     ```
 
+### For training world models
+
+python learning/worldModel/train_world_model.py
+
+### For training policies
+
+The usage command differ in the case of using the library rscope to visualize training results or not.
+
+Commands without rscope:
 * Training a policy from scratch: 
     ```sh 
     python learning/train_jax_ppo.py --env_name [env_name] --run_evals=False

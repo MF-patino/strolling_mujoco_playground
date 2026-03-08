@@ -43,7 +43,7 @@ import tensorboardX
 import wandb
 from worldModel.rollout_saver import WorldModelRolloutSaver
 from worldModel.common import WM_DS_PATH
-from visualize import interactive_visualization
+from visualize_adaptation import interactive_visualization
 
 xla_flags = os.environ.get("XLA_FLAGS", "")
 xla_flags += " --xla_gpu_triton_gemm_any=True"
