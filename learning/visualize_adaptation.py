@@ -5,7 +5,7 @@ import jax
 import numpy as np
 import mujoco
 import mujoco.viewer
-from controller.robot_controller import RobotController
+from controller.offline_controller import RobotController, OfflineRobotController
 
 IMPL = "jax"
     
@@ -127,14 +127,14 @@ def main():
     slippery_env = load_env("Go2StrollSlipperyTerrain", IMPL)
 
     # TODO:
-    # 
-    # Entrenar rugoso desde llano
+    # PCA para embeddings?
     # Comprobar que funciona en el G1
 
     obs_shape, act_shape = env.observation_size, env.action_size
 
-    controller = RobotController(obs_shape, act_shape, initial_env=env_name)
+    controller = OfflineRobotController(obs_shape, act_shape, initial_env=env_name)
 
+    interactive_visualization(rough_env, controller=controller, resetNum=1)
     interactive_visualization(env, controller=controller, resetNum=1)
     interactive_visualization(rough_env, controller=controller, resetNum=1)
     interactive_visualization(env, controller=controller, resetNum=1)
