@@ -41,24 +41,17 @@ class RobotController:
         if not self.deploy:
             return
         
+        self.env_names = ALL_ENVS
+        
         self.loadPolicies(initial_env, obs_shape, act_shape)
         self.loadWorldModels(initial_env)
         print(f"Starting up with {initial_env} world model & policy.")
 
-        self.inaffinity_matrix = jp.stack([self.computePolicyEmbedding(name) for name in ALL_ENVS])
-
+        self.native_errors = {}
+        self.inaffinity_matrix = jp.stack([self.computePolicyEmbedding(name) for name in self.env_names])
         print(f"Raw inaffinity matrix:\n{self.inaffinity_matrix}")
-
-        norm_mat = self.inaffinity_matrix / jp.linalg.norm(self.inaffinity_matrix, axis=1, keepdims=True) 
-
-        # Normalization
-        self.policy_embeddings = {
-            name: embedding for name, embedding in zip(ALL_ENVS, norm_mat)
-        }
-
-        print(f"Normalized policy embeddings:")
-        for pol_name in self.policy_embeddings:
-            print(f"{pol_name}: {self.policy_embeddings[pol_name]}")
+        
+        self.normalizePolicyEmbeddings()
 
         # JIT compile the gradient descent logic
         self.fast_update = jax.jit(train_step)
@@ -75,10 +68,23 @@ class RobotController:
         
         self.sampling = False
 
+    def normalizePolicyEmbeddings(self):
+        # Normalization to get final embeddings.
+        # After this step, we will be able to measure the cosine distance between them to get the "semantic"
+        # difference between two different policies.
+        norm_mat = self.inaffinity_matrix / jp.linalg.norm(self.inaffinity_matrix, axis=1, keepdims=True) 
+        self.policy_embeddings = {
+            name: embedding for name, embedding in zip(self.env_names, norm_mat)
+        }
+
+        print(f"Normalized policy embeddings:")
+        for pol_name in self.policy_embeddings:
+            print(f"{pol_name}: {self.policy_embeddings[pol_name]}")
+
     def loadWorldModels(self, initial_env):
         self.wm_dict = {}
 
-        for env_name in ALL_ENVS:
+        for env_name in self.env_names:
             # Load Pre-trained Weights
             with open(WM_PATH.format(env_name=env_name), 'rb') as f:
                 params = pickle.load(f)
@@ -91,16 +97,17 @@ class RobotController:
             # Initialize training state (Optimizer)
             rng = jax.random.PRNGKey(0)
             wm_state = create_train_state(rng, learning_rate=1e-5, sensor_dim=sensor_dim, action_dim=action_dim) # Low LR for stability
-            self.wms.append((env_name, wm_state.replace(params=params), stats))
-            self.wm_dict[env_name] = (env_name, wm_state.replace(params=params), stats)
+            wm_info = (env_name, wm_state.replace(params=params), stats)
 
-            # The active world model is the one corresponding to the environment we launch the robot in
-            if env_name == initial_env:
-                self.active_wm = self.wms[-1]
+            self.wms.append(wm_info)
+            self.wm_dict[env_name] = wm_info
+
+        # The active world model is the one corresponding to the environment we launch the robot in
+        self.active_wm = self.wm_dict[initial_env]
 
     def loadPolicies(self, initial_env, obs_shape, act_shape):
         basePath = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
-        for env_name in ALL_ENVS:
+        for env_name in self.env_names:
             checkpoint_path = basePath + "/" + POL_PATH.format(env_name=env_name)
 
             # Load network topology
@@ -174,9 +181,12 @@ class RobotController:
             for _, wm, stats in self.wms
         ])
 
-        env_index = ALL_ENVS.index(env_name)
+        env_index = self.env_names.index(env_name)
         # Compute the extra "surprise" by subtracting the baseline noise
-        embedding = jp.abs(mean_errors - mean_errors[env_index])
+        baseline_error = mean_errors[env_index]
+        embedding = jp.abs(mean_errors - baseline_error)
+
+        self.native_errors[env_name] = baseline_error
         
         return embedding
         

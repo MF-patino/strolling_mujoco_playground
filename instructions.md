@@ -38,9 +38,13 @@ This fork of Mujoco Playground provides a general framework for online adaptatio
     python learning/train_jax_ppo.py --env_name [env_name] --play_only=True --load_checkpoint_path [checkpoint_path]
     ```
 
-### For training world models
+### For training world models offline
 
+This script trains all world models (one for each environment) at the same time, using the offline datasets:
+
+```sh 
 python learning/worldModel/train_world_model.py
+```
 
 ### For training policies
 

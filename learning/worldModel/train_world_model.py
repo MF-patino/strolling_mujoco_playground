@@ -146,13 +146,15 @@ def trainWM(env_name):
     train_set = (obs[train_idx], act[train_idx], target[train_idx])
     val_set = (obs[val_idx], act[val_idx], target[val_idx])
 
+    stats = {
+        "obs_mean": obs_mean, "obs_std": obs_std,
+        "act_mean": act_mean, "act_std": act_std,
+        "delta_mean": delta_mean, "delta_std": delta_std
+    }
+    
     # Save statistics for the robot
     with open(statsPath, "wb") as f:
-        pickle.dump({
-            "obs_mean": obs_mean, "obs_std": obs_std,
-            "act_mean": act_mean, "act_std": act_std,
-            "delta_mean": delta_mean, "delta_std": delta_std
-        }, f)
+        pickle.dump(stats, f)
 
     print("Starting training...")
     
@@ -182,7 +184,7 @@ def trainWM(env_name):
         avg_train = np.mean(train_losses)
         avg_val = np.mean(val_losses)
 
-        print(f"Epoch {epoch} | Train Loss: {avg_train:.6f} | Val Loss: {avg_val:.6f}")
+        print(f"Epoch {epoch} | Train Loss: {avg_train:.6f} | Val Loss: {avg_val:.6f}", end='\r', flush=True)
 
         # Checkpointing (based on early-stopping)
         if avg_val < best_val_loss:
@@ -194,6 +196,8 @@ def trainWM(env_name):
             break
         else:
             worse_epochs += 1
+    
+    return env_name, state, stats
             
 def main():
     # All world models are trained from scratch
