@@ -25,23 +25,20 @@ class OfflineRobotController(RobotController):
         #active_name, wm, stats = self.active_wm
         #self.adapt_policy(active_name, "Go2StrollRoughTerrain")
 
-    def adapt_policy(self, base_policy_name, target_env_name):
+    def adapt_policy(self, base_policy_name):
         basePath = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
         
-        print(f"--- STARTING HEADLESS ADAPTATION: {base_policy_name} -> {target_env_name} ---")
+        print(f"--- STARTING HEADLESS ADAPTATION FROM: {base_policy_name} ---")
         
         # 1. Setup paths and parameters
         base_ckpt_path = basePath + "/" + POL_PATH.format(env_name=base_policy_name)
-        new_policy_name = f"Adapted_{target_env_name}_{len(self.policies)}"
+        new_policy_name = f"Adapted_{base_policy_name}_{len(self.policies)}"
         new_ckpt_path = basePath + "/" + POL_PATH.format(env_name=new_policy_name)
 
-        ppo_params = locomotion_params.brax_ppo_config(target_env_name, IMPL)
-        ppo_params.num_timesteps = 10_000_000
-        ppo_params.num_evals = 10
+        self.ppo_params.num_timesteps = 200_000_000
+        self.ppo_params.num_evals = int(self.ppo_params.num_timesteps/1_000_000)
         
-        env = registry.load(target_env_name, config=registry.get_default_config(target_env_name))
-        
-        network_factory = functools.partial(ppo_networks.make_ppo_networks, **ppo_params.network_factory)
+        network_factory = functools.partial(ppo_networks.make_ppo_networks, **self.ppo_params.network_factory)
 
         # Policy parameter checkpointer
         captured_params = [None]
@@ -50,17 +47,23 @@ class OfflineRobotController(RobotController):
             captured_params[0] = params
 
         # Convergence Checker (progress_fn)
-        reward_history = jp.array([])
-        length = 10
+        best_reward = 0
+        evals_since_best = 0
 
         def progress_fn(num_steps, metrics):
+            nonlocal best_reward, evals_since_best
+
             reward = metrics.get('eval/episode_reward', 0.0)
-            jp.append(reward_history, reward)
             print(f"Step {num_steps}: Reward = {reward:.2f}")
             
-            # Convergence Check: If the standard deviation of the last x evals is tiny, 
-            # or it hits a target reward, stop training.
-            if len(reward_history) >= length and jp.std(reward_history[-length:]) < 0.5: # Has stabilized
+            # Early stopping logic for checking convergence
+            if reward > best_reward:
+                best_reward = reward
+                evals_since_best = 0
+            else:
+                evals_since_best += 1
+
+            if evals_since_best > 5:
                 print(f"Convergence reached at step {num_steps}!")
                 raise StopIteration("Converged") # Hack to cleanly break Brax's jax.lax.scan loop
 
@@ -68,23 +71,23 @@ class OfflineRobotController(RobotController):
         final_params = None
         try:
             make_inference_fn, final_params, _ = ppo.train(
-                environment=env,
+                environment=self.env,
                 network_factory=network_factory,
                 restore_checkpoint_path=base_ckpt_path,
                 policy_params_fn=policy_params_fn,
                 progress_fn=progress_fn,
                 seed=0,
                 wrap_env_fn=wrapper.wrap_for_brax_training,
-                **{k: v for k, v in ppo_params.items() if k not in ['network_factory']}
+                **{k: v for k, v in self.ppo_params.items() if k not in ['network_factory']}
             )
         except StopIteration:
             # We aborted training manually, so grab the params we caught in the background
             final_params = captured_params[0]
             
             # Because ppo.train aborted, it didn't return make_inference_fn. We must rebuild it.
-            normalize = running_statistics.normalize if ppo_params.normalize_observations else lambda x, y: x
+            normalize = running_statistics.normalize if self.ppo_params.normalize_observations else lambda x, y: x
             ppo_network = network_factory(
-                env.observation_size, env.action_size, preprocess_observations_fn=normalize
+                self.env.observation_size, self.env.action_size, preprocess_observations_fn=normalize
             )
             make_inference_fn = ppo_networks.make_inference_fn(ppo_network)
 
@@ -93,20 +96,26 @@ class OfflineRobotController(RobotController):
         os.makedirs(new_ckpt_path, exist_ok=True)
 
         ckpt_config = checkpoint.network_config(
-            observation_size=env.observation_size,
-            action_size=env.action_size,
-            normalize_observations=ppo_params.normalize_observations,
+            observation_size=self.env.observation_size,
+            action_size=self.env.action_size,
+            normalize_observations=self.ppo_params.normalize_observations,
             network_factory=network_factory,
         )
-        checkpoint.save(new_ckpt_path, ppo_params.num_timesteps, final_params, ckpt_config)
+        checkpoint.save(new_ckpt_path, self.ppo_params.num_timesteps, final_params, ckpt_config)
+        
+        # Move policy files up into the parent directory
+        dir = os.listdir(new_ckpt_path)[0]
+        for filename in os.listdir(os.path.join(new_ckpt_path, dir)):
+            os.rename(os.path.join(new_ckpt_path, dir, filename), os.path.join(new_ckpt_path, filename))   
+        os.rmdir(os.path.join(new_ckpt_path, dir)) 
         
         # Load the newly trained policy into active memory
         inference_fn = make_inference_fn(final_params, deterministic=True)
 
         # Configuration for world model dataset collection
         wm_saver = WorldModelRolloutSaver(
-            env=env,
-            episode_length=ppo_params.episode_length,
+            env=self.env,
+            episode_length=self.ppo_params.episode_length,
             num_envs=64,
             data_dir=WM_DS_PATH.format(env_name=new_policy_name),
             deterministic=False,
@@ -151,7 +160,7 @@ class OfflineRobotController(RobotController):
                 self.getPredictionWM(wm_state, wm_stats, obs_data, act_data) - next_data)))
             
             # Calculate surprise by subtracting the OLD policy's native baseline noise
-            new_column.append(rmse - self.native_errors[env_name])
+            new_column.append(rmse - self.native_errors[env_name][0])
             
         # Reshape to column vector (N, 1) and append to the existing matrix (N, N) -> (N, N+1)
         new_column = jp.array(new_column).reshape(-1, 1)

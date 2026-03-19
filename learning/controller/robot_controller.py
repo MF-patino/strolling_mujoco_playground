@@ -107,22 +107,24 @@ class RobotController:
 
     def loadPolicies(self, initial_env, obs_shape, act_shape):
         basePath = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+
+        # Load network parameters
+        # They are the same for all environments
+        self.ppo_params = locomotion_params.brax_ppo_config(initial_env, IMPL)
+
         for env_name in self.env_names:
             checkpoint_path = basePath + "/" + POL_PATH.format(env_name=env_name)
 
-            # Load network topology
-            ppo_params = locomotion_params.brax_ppo_config(env_name, IMPL)
-
             normalize = lambda x, y: x
-            if ppo_params.normalize_observations:
+            if self.ppo_params.normalize_observations:
                 normalize = running_statistics.normalize
 
             network_fn = (
                 ppo_networks.make_ppo_networks
             )
-            if hasattr(ppo_params, "network_factory"):
+            if hasattr(self.ppo_params, "network_factory"):
                 network_factory = functools.partial(
-                    network_fn, **ppo_params.network_factory
+                    network_fn, **self.ppo_params.network_factory
                 )
             else:
                 network_factory = network_fn
