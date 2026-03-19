@@ -12,7 +12,7 @@ import matplotlib
 matplotlib.use('TkAgg') 
 import matplotlib.pyplot as plt
 
-from worldModel.common import ALL_ENVS, WM_PATH, WM_STATS_PATH, WM_DS_PATH, POL_PATH
+from worldModel.common import MODELS_ROOT, WM_PATH, WM_STATS_PATH, WM_DS_PATH, POL_PATH
 from worldModel.train_world_model import create_train_state, train_step, load_dataset
 
 import os
@@ -41,7 +41,7 @@ class RobotController:
         if not self.deploy:
             return
         
-        self.env_names = ALL_ENVS
+        self.env_names = os.listdir(MODELS_ROOT)
         
         self.loadPolicies(initial_env, obs_shape, act_shape)
         self.loadWorldModels(initial_env)
@@ -51,7 +51,8 @@ class RobotController:
         self.inaffinity_matrix = jp.stack([self.computePolicyEmbedding(name) for name in self.env_names])
         print(f"Raw inaffinity matrix:\n{self.inaffinity_matrix}")
         
-        self.normalizePolicyEmbeddings()
+        if len(self.env_names) > 1:
+            self.normalizePolicyEmbeddings()
 
         # JIT compile the gradient descent logic
         self.fast_update = jax.jit(train_step)
@@ -64,9 +65,11 @@ class RobotController:
         # window_size=250: Detect changes based on the last 5 seconds of data
         window_size = 100
         self.detector = KSDriftDetector(total_size=1000, window_size=window_size, adwin_delta=5e-2)
-        self.buffer = deque(maxlen=window_size)
         
         self.sampling = False
+
+    def setEnv(self, env):
+        self.env = env
 
     def normalizePolicyEmbeddings(self):
         # Normalization to get final embeddings.
@@ -160,7 +163,7 @@ class RobotController:
         pred_next_obs = self.getPredictionWM(wm, stats, obs, action)
         
         # Calculate error
-        error = jp.mean(jp.square(pred_next_obs - next_obs))
+        error = jp.linalg.norm(pred_next_obs - next_obs)
         alpha = 0.1
         smooth_error = error if len(self.errors[name]) == 0 else alpha * error + (1-alpha) * self.errors[name][-1]
         
@@ -178,17 +181,18 @@ class RobotController:
         # Load data
         obs_data, act_data, next_data = load_dataset(datasetPath)
 
-        mean_errors = jp.array([
-            jp.sqrt(jp.mean(jp.square(self.getPredictionWM(wm, stats, obs_data, act_data) - next_data)))
+        errors = jp.vstack([
+            jp.linalg.norm(self.getPredictionWM(wm, stats, obs_data, act_data) - next_data, axis=1)
             for _, wm, stats in self.wms
         ])
-
+        mean_errors = jp.mean(errors, axis=1)
+        
         env_index = self.env_names.index(env_name)
         # Compute the extra "surprise" by subtracting the baseline noise
         baseline_error = mean_errors[env_index]
         embedding = jp.abs(mean_errors - baseline_error)
 
-        self.native_errors[env_name] = baseline_error
+        self.native_errors[env_name] = (baseline_error, errors[env_index,:])
         
         return embedding
         
@@ -228,13 +232,14 @@ class RobotController:
 
         return next_name
 
+    def adapt_policy(self, base_policy_name):
+        raise Exception("Method implemented in OfflineRobotController")
+    
     def control_loop(self, obs, action, next_obs):
         if not self.deploy:
             return
         
         obs, next_obs = obs["wm_state"], next_obs["wm_state"]
-        
-        self.buffer.append((obs, action, next_obs))
 
         if self.sampling:
             prev_active_name = self.active_wm[0]

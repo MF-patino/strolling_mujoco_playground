@@ -34,6 +34,8 @@ def interactive_visualization(env, controller=None, resetNum=-1, jit_inference=N
         obs_shape, act_shape = env.observation_size, env.action_size
         controller = RobotController(obs_shape, act_shape, jit_inference=jit_inference)
 
+    controller.setEnv(env)
+
     # Get the underlying standard MuJoCo model for the viewer
     if hasattr(env, 'mj_model'):
         model = env.mj_model
@@ -134,12 +136,12 @@ def main():
 
     controller = OfflineRobotController(obs_shape, act_shape, initial_env=env_name)
 
-    interactive_visualization(rough_env, controller=controller, resetNum=1)
     interactive_visualization(env, controller=controller, resetNum=1)
     interactive_visualization(rough_env, controller=controller, resetNum=1)
     interactive_visualization(env, controller=controller, resetNum=1)
     interactive_visualization(slippery_env, controller=controller, resetNum=1)
-    interactive_visualization(env, controller=controller, resetNum=1)
+    interactive_visualization(rough_env, controller=controller, resetNum=1)
+    interactive_visualization(slippery_env, controller=controller, resetNum=1)
 
 if __name__ == "__main__":
     main()
