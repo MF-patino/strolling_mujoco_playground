@@ -299,14 +299,21 @@ class RobotController:
             return
         
         # Update detector
-        is_drift, statistic = self.detector.update(error)
+        is_drift, _, policy_performance_alert = self.detector.update(error, self.native_errors[active_name])
 
-        step = len(self.detector.stat_values)
+        num_detector_samples = len(self.detector.stat_values)
         
-        if is_drift:
-            idx = step - 1
-            self.drift_indices.append(idx)
-            print(f"!!! DOMAIN CHANGE DETECTED !!! statistic={statistic:.2e}.")
+        if is_drift or policy_performance_alert:
+
+            if policy_performance_alert:
+                print(f"Policy performance alert")
+            else:
+                print(f"Domain change detected")
+            
+            if len(self.env_names) < 2 or (policy_performance_alert and len(self.drift_indices) > 0):
+                self.adapt_policy(active_name)
+                return
+            
             self.sampled_errors = {name: [] for name, _, _ in self.wms}
 
             # Policies are safely sampled 15 times (.3 seconds) initially. 
@@ -335,7 +342,10 @@ class RobotController:
 
             self.sampling = True
 
-        if is_drift and step > self.detector.min_samples:
+            idx = num_detector_samples - 1
+            self.drift_indices.append(idx)
+
+            # Plotting
             '''for wm_name in self.errors:
                 plt.plot(self.errors[wm_name], label=f"{wm_name} WM errors")
 
