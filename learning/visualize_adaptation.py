@@ -91,7 +91,7 @@ def interactive_visualization(env, controller=None, resetNum=-1, jit_inference=N
             # Step environment
             prev_obs = state.obs
             state = env.jit_step(state, action)
-            controller.control_loop(prev_obs, action, state.obs)
+            controller.control_loop(prev_obs, action, state)
 
             # Ensure computation is done before we try to read it
             state.data.qpos.block_until_ready()
@@ -136,10 +136,15 @@ def main():
 
     controller = OfflineRobotController(obs_shape, act_shape, initial_env=env_name)
 
+    interactive_visualization(rough_env, controller=controller, resetNum=1)
     interactive_visualization(env, controller=controller, resetNum=1)
+    interactive_visualization(env, controller=controller, resetNum=1)
+    interactive_visualization(slippery_env, controller=controller, resetNum=1)
     interactive_visualization(rough_env, controller=controller, resetNum=1)
     interactive_visualization(env, controller=controller, resetNum=1)
     interactive_visualization(slippery_env, controller=controller, resetNum=1)
+    interactive_visualization(rough_env, controller=controller, resetNum=1)
+    interactive_visualization(env, controller=controller, resetNum=1)
     interactive_visualization(rough_env, controller=controller, resetNum=1)
     interactive_visualization(slippery_env, controller=controller, resetNum=1)
 

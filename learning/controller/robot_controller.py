@@ -24,7 +24,6 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, ConstantKernel as C
 IMPL = "jax"
 
-# Work in progress controller for the robot
 class RobotController:
     def __init__(self, obs_shape, act_shape, initial_env=None, jit_inference=None):
         self.cmd = jp.array([1., 0., 0.])
@@ -57,15 +56,19 @@ class RobotController:
         # JIT compile the gradient descent logic
         self.fast_update = jax.jit(train_step)
         
-        # History of errors for plotting 
+        # Histories for plotting 
         self.errors = {name: [] for name, _, _ in self.wms}
+        self.rewards = {name: [] for name, _, _ in self.wms}
         self.drift_indices = []
 
-        # total_size=1000: Takes 20 seconds to fill the queue
-        # window_size=250: Detect changes based on the last 5 seconds of data
-        window_size = 100
-        self.detector = KSDriftDetector(total_size=1000, window_size=window_size, adwin_delta=5e-2)
+        # KS-ADWIN detector configuration:
+        # total_size=1000: 20 seconds of total memory
+        # window_size=100: Detect changes based on the last 2 seconds of data
+        self.detector = KSDriftDetector(total_size=1000, window_size=100, adwin_delta=.1)
         
+        # GP search parameters:
+        # Should converge after 5 iterations (empirically tested)
+        self.max_iterations = 5
         self.sampling = False
 
     def setEnv(self, env):
@@ -202,15 +205,30 @@ class RobotController:
         active_emb = self.policy_embeddings[active_name]
         mean, std = self.gp.predict([pol_emb], return_std=True)
                         
-        # UCB formula: Exploit (mean) + Explore (Kappa * std) - Safety constraint (Gamma * policy distance)
+        # UCB formula: Exploit (mean) + Explore (Kappa * std) * Safety constraints
 
         # It is dangerous to rollout policies that are too different together for stability reasons.
         # With the safety constraint, the cost of transitioning from one to the next is lower.
-        # If not, the robot may switch directly from flat to slippery on rough terrain, falling over.
+        # If not, the robot may switch directly from the flat policy to slippery on rough terrain, falling over.
         cos_dist = 1 - jp.dot(pol_emb, active_emb) / (jp.linalg.norm(pol_emb) * jp.linalg.norm(active_emb))
-        kappa = 1.5; gamma = .8#2.
-        ucb_score = -mean[0] + kappa * std[0] - gamma * cos_dist#* jp.exp(-gamma * cos_dist)
+        kappa = 1.5; gamma = .5; trust_region = .7
+        ucb_score = mean[0] + kappa * std[0] * jp.exp(-gamma * cos_dist) * (cos_dist < trust_region)
         return ucb_score, mean, std
+    
+    def getFinalPolicyScore(self, pol_name):
+        '''
+        Computes the UCB score from the policy's obtained rewards.
+        We use only the real data obtained for the final decision after a
+        policy search process.
+        '''
+        # If no data was collected for this policy, the GP model did not
+        # think it would be promissing. Donnot choose it.
+        if len(self.sampled_rewards[pol_name]) == 0:
+            return 0
+        
+        samples = jp.array(self.sampled_rewards[pol_name])
+        # UCB without scaling the std
+        return jp.mean(samples) + jp.std(samples)
     
     def getNextPolicy(self, active_name):
         # Fit the GP with the new real-world data
@@ -235,17 +253,18 @@ class RobotController:
     def adapt_policy(self, base_policy_name):
         raise Exception("Method implemented in OfflineRobotController")
     
-    def control_loop(self, obs, action, next_obs):
+    def control_loop(self, obs, action, state):
         if not self.deploy:
             return
         
+        next_obs, reward = state.obs, state.reward
         obs, next_obs = obs["wm_state"], next_obs["wm_state"]
 
         if self.sampling:
             prev_active_name = self.active_wm[0]
             self.active_wm = None
             for name in self.samples2collect:
-                sample_num = len(self.sampled_errors[name])
+                sample_num = len(self.sampled_rewards[name])
                 if sample_num < self.samples2collect[name]:
                     if prev_active_name != name:
                         print(f"Sampling {name}.")
@@ -255,9 +274,8 @@ class RobotController:
                     break
 
             if self.active_wm is None:
-                next_name = self.getNextPolicy(prev_active_name)
-
                 if self.iteration < self.max_iterations:
+                    next_name = self.getNextPolicy(prev_active_name)
                     # Forget data that will be stale in the next iteration
                     # As the policy chosen by the GP will be resampled, the mean error and std will change
                     mask = (self.X_train != self.policy_embeddings[next_name]).any(axis=1)
@@ -276,21 +294,28 @@ class RobotController:
 
                     print(f"Beginning iteration {self.iteration} with {next_name}.")
                 else:
+                    # To make the final decision, delegating on the GP to choose the best policy may be incorrect.
+                    # The GP is curious and may want to explore a novel route after having seen a lot of data of the
+                    # best performing policy.
+
+                    # Thus, we base the final choice on only the UCB scores computed from the hard data collected.
+                    errs = [(self.getFinalPolicyScore(pol_name), pol_name) for pol_name in self.sampled_rewards]
+                    _, next_name = max(errs)
+
                     print(f"Converged on {next_name}.")
                     self.active_wm = self.wm_dict[next_name]
                     self.inference = self.policies[next_name]
                     self.sampling = False
 
         active_name, wm, stats = self.active_wm
-        error = self.getErrorWM(active_name, wm, stats, obs, action, next_obs)
-        #[self.getErrorWM(name, wm, stats, obs, action, next_obs) for name, wm, stats in self.wms if name != active_name]
+        self.rewards[active_name].append(reward)
 
         if self.sampling:
-            self.sampled_errors[active_name].append(error)
+            self.sampled_rewards[active_name].append(reward)
 
             # When sampling batch is over for the policy, compute its new GP datapoint
-            if len(self.sampled_errors[active_name]) == self.samples2collect[active_name]:
-                samples = jp.array(self.sampled_errors[active_name])
+            if len(self.sampled_rewards[active_name]) == self.samples2collect[active_name]:
+                samples = jp.array(self.sampled_rewards[active_name])
 
                 self.X_train = np.vstack([self.X_train, self.policy_embeddings[active_name]])
                 self.y_train = np.append(self.y_train, jp.mean(samples))
@@ -298,6 +323,9 @@ class RobotController:
 
             return
         
+        error = self.getErrorWM(active_name, wm, stats, obs, action, next_obs)
+        #[self.getErrorWM(name, wm, stats, obs, action, next_obs) for name, wm, stats in self.wms if name != active_name]
+
         # Update detector
         is_drift, _, policy_performance_alert = self.detector.update(error, self.native_errors[active_name])
 
@@ -310,20 +338,31 @@ class RobotController:
             else:
                 print(f"Domain change detected")
             
-            if len(self.env_names) < 2 or (policy_performance_alert and len(self.drift_indices) > 0):
+            # The only case where a performance alert is not a valid drift detection
+            # happens when the actual drift detection module still doesn't have enough samples yet.
+            # If this happens, it must be that a policy search process has just finished and the selected
+            # policy is not good enough (results in serious gait instabilities). Thus, we should adapt a new policy
+            # at this point.
+            adapt = policy_performance_alert and not is_drift and len(self.drift_indices) > 0
+            # Adaptation is also needed if there was a change alert and we only have 1 policy
+            if len(self.env_names) == 1 or adapt:
                 self.adapt_policy(active_name)
                 return
             
-            self.sampled_errors = {name: [] for name, _, _ in self.wms}
+            self.sampled_rewards = {name: [] for name, _, _ in self.wms}
 
-            # Policies are safely sampled 15 times (.3 seconds) initially. 
-            # 20 (.4 seconds) is too much for slippery in rough terrain: robot falls.
-            self.increment_samples = 15
+            # Policies are safely sampled 25 times (.5 seconds) each iteration. 
+            # Switching policies at a higher rate can cause stability issues.
+            self.increment_samples = 25
 
-            # Assign last obtained errors so that we may be able to compare other policies
-            # against the originally active one without having to roll it out
-            samples = self.errors[active_name][-self.increment_samples*3:]
-            self.sampled_errors[active_name] = samples
+            # We will "seed" the GP search process with some initial samples.
+            # IF performance alert: sample only 2 current errors as sometimes these alerts are so quick that 2
+            # consecutive, very big error samples are enough signal for it to fire.
+            # IF not performance alert: we can assign last obtained errors so that we may start the search process
+            # with a bit more useful data.
+            init_samples = 2 if policy_performance_alert else self.increment_samples*2
+            samples = self.rewards[active_name][-init_samples:]
+            self.sampled_rewards[active_name] = samples
 
             self.X_train = np.array([self.policy_embeddings[active_name]])
             samples = jp.array(samples)
@@ -331,8 +370,6 @@ class RobotController:
             self.alpha = np.array([jp.var(samples)/len(samples)])
 
             self.iteration = 1
-            # Should converge after 5 iterations
-            self.max_iterations = 5
 
             next_name = self.getNextPolicy(active_name)
 
