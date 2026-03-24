@@ -5,7 +5,7 @@ import numpy as np
 
 class KSDriftDetector:
     def __init__(self, total_size=1000, window_size=250, adwin_delta=1e-3, 
-                 performance_alert_threshold=1e4, hertz=50):
+                 performance_alert_threshold=1e-4, hertz=50):
         """
         KS-based drift detector with ADWIN on the KS statistic.
 
