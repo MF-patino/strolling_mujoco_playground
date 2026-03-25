@@ -17,11 +17,11 @@ from worldModel.train_world_model import create_train_state, train_step, load_da
 
 import os
 import pickle
-from collections import deque
 from controller.ks_detector import KSDriftDetector
 
 from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import RBF, ConstantKernel as C
+from sklearn.gaussian_process.kernels import RBF
+from sklearn.decomposition import TruncatedSVD
 IMPL = "jax"
 
 class RobotController:
@@ -42,6 +42,27 @@ class RobotController:
         
         self.env_names = os.listdir(MODELS_ROOT)
         
+        # Histories for plotting 
+        self.errors = {name: [] for name in self.env_names}
+        self.rewards = {name: [] for name in self.env_names}
+        self.drift_indices = []
+
+        # KS-ADWIN detector configuration:
+        # total_size=1000: 20 seconds of total memory
+        # window_size=100: Detect changes based on the last 2 seconds of data
+        self.detector = KSDriftDetector(total_size=1000, window_size=100, adwin_delta=.1)
+        
+        # GP search parameters:
+        # Should converge after 5 iterations (empirically tested)
+        self.max_iterations = 5
+        self.sampling = False
+        # Policy embeddings will have a maximum of 4 dimensions for the GP
+        self.max_pol_emb_dim = 4
+        # If the final policy selected is different from the currently
+        # loaded one, wait a few more timesteps before measuring policy
+        # performance to stabilize the robot
+        self.extra_timesteps = 15
+
         self.loadPolicies(initial_env, obs_shape, act_shape)
         self.loadWorldModels(initial_env)
         print(f"Starting up with {initial_env} world model & policy.")
@@ -55,30 +76,31 @@ class RobotController:
 
         # JIT compile the gradient descent logic
         self.fast_update = jax.jit(train_step)
-        
-        # Histories for plotting 
-        self.errors = {name: [] for name, _, _ in self.wms}
-        self.rewards = {name: [] for name, _, _ in self.wms}
-        self.drift_indices = []
-
-        # KS-ADWIN detector configuration:
-        # total_size=1000: 20 seconds of total memory
-        # window_size=100: Detect changes based on the last 2 seconds of data
-        self.detector = KSDriftDetector(total_size=1000, window_size=100, adwin_delta=.1)
-        
-        # GP search parameters:
-        # Should converge after 5 iterations (empirically tested)
-        self.max_iterations = 5
-        self.sampling = False
 
     def setEnv(self, env):
         self.env = env
 
     def normalizePolicyEmbeddings(self):
+        if len(self.policies) > self.max_pol_emb_dim:
+            print(f"Applying SVD to reduce dimensionality from {len(self.policies)}D to 4D.")
+            # Extract the top 4 principal components that explain the most variance
+            reducer = TruncatedSVD(n_components=self.max_pol_emb_dim)
+            inaffinity_matrix = reducer.fit_transform(self.inaffinity_matrix)
+            
+            # Convert back to JAX array for the rest of the pipeline
+            inaffinity_matrix = jp.array(inaffinity_matrix)
+            
+            # Optional: Print how much of the original information was preserved
+            variance_ratio = sum(reducer.explained_variance_ratio_) * 100
+            print(f"SVD preserved {variance_ratio:.2f}% of the variance.")
+        else:
+            inaffinity_matrix = self.inaffinity_matrix
+
         # Normalization to get final embeddings.
         # After this step, we will be able to measure the cosine distance between them to get the "semantic"
         # difference between two different policies.
-        norm_mat = self.inaffinity_matrix / jp.linalg.norm(self.inaffinity_matrix, axis=1, keepdims=True) 
+        norm_mat = inaffinity_matrix / jp.linalg.norm(inaffinity_matrix, axis=1, keepdims=True) 
+
         self.policy_embeddings = {
             name: embedding for name, embedding in zip(self.env_names, norm_mat)
         }
@@ -217,18 +239,19 @@ class RobotController:
     
     def getFinalPolicyScore(self, pol_name):
         '''
-        Computes the UCB score from the policy's obtained rewards.
+        Computes the LCB score from the policy's obtained rewards.
         We use only the real data obtained for the final decision after a
         policy search process.
         '''
         # If no data was collected for this policy, the GP model did not
         # think it would be promissing. Donnot choose it.
         if len(self.sampled_rewards[pol_name]) == 0:
-            return 0
+            return -jp.inf
         
         samples = jp.array(self.sampled_rewards[pol_name])
-        # UCB without scaling the std
-        return jp.mean(samples) + jp.std(samples)
+
+        # LCB without scaling the std (we reward consistency)
+        return jp.mean(samples) - jp.std(samples)
     
     def getNextPolicy(self, active_name):
         # Fit the GP with the new real-world data
@@ -296,16 +319,22 @@ class RobotController:
                 else:
                     # To make the final decision, delegating on the GP to choose the best policy may be incorrect.
                     # The GP is curious and may want to explore a novel route after having seen a lot of data of the
-                    # best performing policy.
+                    # best performing policy, since the search is based on UCB scores.
 
-                    # Thus, we base the final choice on only the UCB scores computed from the hard data collected.
+                    # Thus, we base the final choice on only the LCB scores computed from the hard data collected.
                     errs = [(self.getFinalPolicyScore(pol_name), pol_name) for pol_name in self.sampled_rewards]
                     _, next_name = max(errs)
 
                     print(f"Converged on {next_name}.")
                     self.active_wm = self.wm_dict[next_name]
                     self.inference = self.policies[next_name]
-                    self.sampling = False
+
+                    if prev_active_name != next_name and self.iteration < jp.inf:
+                        print("Waiting extra time after final switch")
+                        self.iteration = jp.inf
+                        self.samples2collect[next_name] += self.extra_timesteps
+                    else:
+                        self.sampling = False
 
         active_name, wm, stats = self.active_wm
         self.rewards[active_name].append(reward)
