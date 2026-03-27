@@ -138,7 +138,6 @@ def main():
 
     interactive_visualization(rough_env, controller=controller, resetNum=1)
     interactive_visualization(env, controller=controller, resetNum=1)
-    interactive_visualization(env, controller=controller, resetNum=1)
     interactive_visualization(slippery_env, controller=controller, resetNum=1)
     interactive_visualization(rough_env, controller=controller, resetNum=1)
     interactive_visualization(env, controller=controller, resetNum=1)

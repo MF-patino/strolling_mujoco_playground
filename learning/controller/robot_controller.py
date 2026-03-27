@@ -58,6 +58,12 @@ class RobotController:
         self.sampling = False
         # Policy embeddings will have a maximum of 4 dimensions for the GP
         self.max_pol_emb_dim = 4
+        # Policies are safely sampled 25 times (.5 seconds) each iteration. 
+        # Switching policies at a higher rate can cause stability issues.
+        self.increment_samples = 25
+        # After sampling, we discard the first 10 samples of each iteration when
+        # fitting the GP. This is done to disregard the noise when switching policies
+        self.noisy_samples = 10
         # If the final policy selected is different from the currently
         # loaded one, wait a few more timesteps before measuring policy
         # performance to stabilize the robot
@@ -250,6 +256,11 @@ class RobotController:
         
         samples = jp.array(self.sampled_rewards[pol_name])
 
+        remainder = len(samples) % self.increment_samples
+        first_samples = samples[:remainder]
+        samples = samples[remainder:].reshape([-1, self.increment_samples])[:,self.extra_timesteps:].ravel()
+        samples = jp.append(first_samples, samples)
+
         # LCB without scaling the std (we reward consistency)
         return jp.mean(samples) - jp.std(samples)
     
@@ -345,6 +356,10 @@ class RobotController:
             # When sampling batch is over for the policy, compute its new GP datapoint
             if len(self.sampled_rewards[active_name]) == self.samples2collect[active_name]:
                 samples = jp.array(self.sampled_rewards[active_name])
+                remainder = len(samples) % self.increment_samples
+                first_samples = samples[:remainder]
+                samples = samples[remainder:].reshape([-1, self.increment_samples])[:,self.extra_timesteps:].ravel()
+                samples = jp.append(first_samples, samples)
 
                 self.X_train = np.vstack([self.X_train, self.policy_embeddings[active_name]])
                 self.y_train = np.append(self.y_train, jp.mean(samples))
@@ -379,10 +394,6 @@ class RobotController:
                 return
             
             self.sampled_rewards = {name: [] for name, _, _ in self.wms}
-
-            # Policies are safely sampled 25 times (.5 seconds) each iteration. 
-            # Switching policies at a higher rate can cause stability issues.
-            self.increment_samples = 25
 
             # We will "seed" the GP search process with some initial samples.
             # IF performance alert: sample only 2 current errors as sometimes these alerts are so quick that 2
