@@ -139,6 +139,7 @@ class OfflineRobotController(RobotController):
 
         # Create a new WM error category
         self.errors[pair_name] = []
+        self.rewards[pair_name] = []
 
         # Include models in internal data structures
         self.wms.append(wm_info)
@@ -155,12 +156,11 @@ class OfflineRobotController(RobotController):
             datasetPath = WM_DS_PATH.format(env_name=env_name)
             obs_data, act_data, next_data = load_dataset(datasetPath)
             
-            # Calculate RMSE of the new WM on the cataloged policy's data
-            rmse = jp.sqrt(jp.mean(jp.square(
-                self.getPredictionWM(wm_state, wm_stats, obs_data, act_data) - next_data)))
+            # Calculate mean error of the new WM on the cataloged policy's data
+            err = jp.mean(jp.linalg.norm(self.getPredictionWM(wm_state, wm_stats, obs_data, act_data) - next_data, axis=1))
             
             # Calculate surprise by subtracting the OLD policy's native baseline noise
-            new_column.append(rmse - self.native_errors[env_name][0])
+            new_column.append(err - self.native_errors[env_name][0])
             
         # Reshape to column vector (N, 1) and append to the existing matrix (N, N) -> (N, N+1)
         new_column = jp.array(new_column).reshape(-1, 1)
