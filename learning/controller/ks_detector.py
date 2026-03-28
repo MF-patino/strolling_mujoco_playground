@@ -87,7 +87,12 @@ class KSDriftDetector:
         self.stat_values.append(statistic)
         
         self.adwin.update(statistic)
-        is_drift = self.adwin.drift_detected
+        is_drift = False
+        # If ADWIN detects drift and the errors are worse recently
+        if self.adwin.drift_detected and np.mean(reference_data) < np.mean(window_data):
+            # And if the distributions are becoming more different recently
+            if np.mean(self.stat_values[-len(data):-self.window_size]) < np.mean(self.stat_values[-self.window_size:]):
+                is_drift = True
 
         if is_drift:
             self.reset(data)
