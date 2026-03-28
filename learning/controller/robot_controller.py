@@ -63,7 +63,7 @@ class RobotController:
         self.increment_samples = 25
         # After sampling, we discard the first 10 samples of each iteration when
         # fitting the GP. This is done to disregard the noise when switching policies
-        self.noisy_samples = 10
+        self.noisy_samples = 15
         # If the final policy selected is different from the currently
         # loaded one, wait a few more timesteps before measuring policy
         # performance to stabilize the robot
@@ -239,13 +239,13 @@ class RobotController:
         # With the safety constraint, the cost of transitioning from one to the next is lower.
         # If not, the robot may switch directly from the flat policy to slippery on rough terrain, falling over.
         cos_dist = 1 - jp.dot(pol_emb, active_emb) / (jp.linalg.norm(pol_emb) * jp.linalg.norm(active_emb))
-        kappa = 1.5; gamma = .5; trust_region = .7
+        kappa = 2.; gamma = .5; trust_region = .7
         ucb_score = mean[0] + kappa * std[0] * jp.exp(-gamma * cos_dist) * (cos_dist < trust_region)
         return ucb_score, mean, std
     
     def getFinalPolicyScore(self, pol_name):
         '''
-        Computes the LCB score from the policy's obtained rewards.
+        Computes the expected reward from the policy's obtained rewards.
         We use only the real data obtained for the final decision after a
         policy search process.
         '''
@@ -258,11 +258,11 @@ class RobotController:
 
         remainder = len(samples) % self.increment_samples
         first_samples = samples[:remainder]
-        samples = samples[remainder:].reshape([-1, self.increment_samples])[:,self.extra_timesteps:].ravel()
+        samples = samples[remainder:].reshape([-1, self.increment_samples])[:,self.noisy_samples:].ravel()
         samples = jp.append(first_samples, samples)
 
-        # LCB without scaling the std (we reward consistency)
-        return jp.mean(samples) - jp.std(samples)
+        # Reward consistency by only taking the mean reward into account
+        return jp.mean(samples)
     
     def getNextPolicy(self, active_name):
         # Fit the GP with the new real-world data
@@ -286,6 +286,10 @@ class RobotController:
 
     def adapt_policy(self, base_policy_name):
         raise Exception("Method implemented in OfflineRobotController")
+    
+    def set_policy(self, pol_name):
+        self.active_wm = self.wm_dict[pol_name]
+        self.inference = self.policies[pol_name]
     
     def control_loop(self, obs, action, state):
         if not self.deploy:
@@ -327,25 +331,27 @@ class RobotController:
                     self.iteration += 1
 
                     print(f"Beginning iteration {self.iteration} with {next_name}.")
-                else:
+                elif self.iteration == self.max_iterations:
                     # To make the final decision, delegating on the GP to choose the best policy may be incorrect.
                     # The GP is curious and may want to explore a novel route after having seen a lot of data of the
                     # best performing policy, since the search is based on UCB scores.
 
-                    # Thus, we base the final choice on only the LCB scores computed from the hard data collected.
+                    # Thus, we base the final choice on scores computed only from the real data collected.
                     errs = [(self.getFinalPolicyScore(pol_name), pol_name) for pol_name in self.sampled_rewards]
                     _, next_name = max(errs)
 
                     print(f"Converged on {next_name}.")
-                    self.active_wm = self.wm_dict[next_name]
-                    self.inference = self.policies[next_name]
+                    self.set_policy(next_name)
 
-                    if prev_active_name != next_name and self.iteration < jp.inf:
+                    if prev_active_name != next_name:
+                        self.iteration += 1
                         print("Waiting extra time after final switch")
-                        self.iteration = jp.inf
                         self.samples2collect[next_name] += self.extra_timesteps
                     else:
                         self.sampling = False
+                else: # End of extra stability iteration
+                    self.set_policy(prev_active_name)
+                    self.sampling = False
 
         active_name, wm, stats = self.active_wm
         self.rewards[active_name].append(reward)
@@ -358,7 +364,7 @@ class RobotController:
                 samples = jp.array(self.sampled_rewards[active_name])
                 remainder = len(samples) % self.increment_samples
                 first_samples = samples[:remainder]
-                samples = samples[remainder:].reshape([-1, self.increment_samples])[:,self.extra_timesteps:].ravel()
+                samples = samples[remainder:].reshape([-1, self.increment_samples])[:,self.noisy_samples:].ravel()
                 samples = jp.append(first_samples, samples)
 
                 self.X_train = np.vstack([self.X_train, self.policy_embeddings[active_name]])
@@ -376,7 +382,6 @@ class RobotController:
         num_detector_samples = len(self.detector.stat_values)
         
         if is_drift or policy_performance_alert:
-
             if policy_performance_alert:
                 print(f"Policy performance alert")
             else:
