@@ -18,6 +18,7 @@ from worldModel.train_world_model import create_train_state, train_step, load_da
 import os
 import pickle
 from controller.ks_detector import KSDriftDetector
+import controller.plots as plots
 
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF
@@ -87,6 +88,8 @@ class RobotController:
         self.env = env
 
     def normalizePolicyEmbeddings(self):
+        plots.policyEmbeddings3D(self)
+
         if len(self.policies) > self.max_pol_emb_dim:
             print(f"Applying SVD to reduce dimensionality from {len(self.policies)}D to 4D.")
             # Extract the top 4 principal components that explain the most variance
