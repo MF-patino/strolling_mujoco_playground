@@ -4,13 +4,13 @@ import matplotlib.cm as cm
 import numpy as np
 from sklearn.decomposition import TruncatedSVD
 
-def policyEmbeddings2D(self):
+def policyEmbeddings2D(controller):
 
     print("Generating 2D Latent Space Plot...")
 
     # 1. Reduce the raw inaffinity matrix strictly to 2D
     reducer_2d = TruncatedSVD(n_components=2)
-    raw_mat_np = np.array(self.inaffinity_matrix)
+    raw_mat_np = np.array(controller.inaffinity_matrix)
     coords_2d = reducer_2d.fit_transform(raw_mat_np)
     variance_ratio = sum(reducer_2d.explained_variance_ratio_) * 100
     print(f"SVD preserved {variance_ratio:.2f}% of the variance.")
@@ -24,10 +24,10 @@ def policyEmbeddings2D(self):
     fig, ax = plt.subplots(figsize=(8, 8))
     
     # Get a distinct colormap for the policies
-    colors = cm.get_cmap('tab10', len(self.env_names))
+    colors = cm.get_cmap('tab10', len(controller.env_names))
 
     # 4. Scatter and Annotate each policy
-    for i, env_name in enumerate(self.env_names):
+    for i, env_name in enumerate(controller.env_names):
         x, y = coords_2d_norm[i, 0], coords_2d_norm[i, 1]
         
         # Draw the point
@@ -64,14 +64,14 @@ def policyEmbeddings2D(self):
     
     plt.show()
 
-def policyEmbeddings3D(self):
+def policyEmbeddings3D(controller):
     print("Generating 3D Latent Space Sphere Plot...")
 
     # 1. Reduce the raw inaffinity matrix strictly to 3D
     # (Make sure we have at least 3 policies to do a 3D projection)
-    n_components = min(3, self.inaffinity_matrix.shape[1])
+    n_components = min(3, controller.inaffinity_matrix.shape[1])
     reducer_3d = TruncatedSVD(n_components=n_components)
-    raw_mat_np = np.array(self.inaffinity_matrix)
+    raw_mat_np = np.array(controller.inaffinity_matrix)
     coords_3d = reducer_3d.fit_transform(raw_mat_np)
     variance_ratio = sum(reducer_3d.explained_variance_ratio_) * 100
     print(f"SVD preserved {variance_ratio:.2f}% of the variance.")
@@ -89,7 +89,7 @@ def policyEmbeddings3D(self):
     ax = fig.add_subplot(111, projection='3d')
     
     # Get a distinct colormap for the policies
-    colors = cm.get_cmap('tab10', len(self.env_names))
+    colors = cm.get_cmap('tab10', len(controller.env_names))
 
     # 4. Draw the translucent 3D Unit Sphere
     u = np.linspace(0, 2 * np.pi, 60)
@@ -103,7 +103,7 @@ def policyEmbeddings3D(self):
     ax.plot_wireframe(x_sphere, y_sphere, z_sphere, color='gray', alpha=0.1, linewidth=0.5)
 
     # 5. Scatter and Annotate each policy
-    for i, env_name in enumerate(self.env_names):
+    for i, env_name in enumerate(controller.env_names):
         x, y, z = coords_3d_norm[i, 0], coords_3d_norm[i, 1], coords_3d_norm[i, 2]
         
         # Draw the point on the sphere surface
@@ -138,4 +138,28 @@ def policyEmbeddings3D(self):
     plt.legend(loc='upper left', bbox_to_anchor=(1.05, 1), title="Policies")
     plt.tight_layout()
     
+    plt.show()
+
+def statisticDriftHistory(controller):
+    plt.plot(controller.detector.stat_values, label="KS statistic")
+
+    plt.vlines(controller.drift_indices,
+        ymin=min(controller.detector.stat_values),
+        ymax=max(controller.detector.stat_values),
+        color="red", alpha=0.6, label='Drift detection')
+
+    plt.xlabel("Time step")
+    plt.title("KS-ADWIN concept drift detector history")
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+def wmErrorHistory(controller):
+    for wm_name in controller.errors:
+        plt.plot(controller.errors[wm_name], label=f"{wm_name} WM errors")
+
+    plt.xlabel("Time step")
+    plt.title("WM error history")
+    plt.legend()
+    plt.tight_layout()
     plt.show()

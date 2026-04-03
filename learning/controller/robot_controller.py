@@ -25,6 +25,17 @@ from sklearn.gaussian_process.kernels import RBF
 from sklearn.decomposition import TruncatedSVD
 IMPL = "jax"
 
+@functools.partial(jax.jit, static_argnames=['apply_fn'])
+def _jit_predict_wm(apply_fn, params, stats, obs, action):
+    # Predict what should have happened
+    norm_obs = (obs - stats['obs_mean']) / stats['obs_std']
+    norm_act = (action - stats['act_mean']) / stats['act_std']
+
+    norm_delta = apply_fn({'params': params}, norm_obs, norm_act)
+
+    # Denormalize to check error in real units
+    return obs + (norm_delta * stats['delta_std']) + stats['delta_mean']
+
 class RobotController:
     def __init__(self, obs_shape, act_shape, initial_env=None, jit_inference=None):
         self.cmd = jp.array([1., 0., 0.])
@@ -180,18 +191,11 @@ class RobotController:
 
         # The active policy is the one corresponding to the environment we launch the robot in
         self.inference = self.policies[initial_env]
-        
+    
+    
     def getPredictionWM(self, wm, stats, obs, action):
         # Predict what should have happened
-        norm_obs = (obs - stats['obs_mean']) / stats['obs_std']
-        norm_act = (action - stats['act_mean']) / stats['act_std']
-
-        norm_delta = wm.apply_fn(
-            {'params': wm.params}, norm_obs, norm_act
-        )
-
-        # Denormalize to check error in real units (e.g. degrees per second)
-        return obs + (norm_delta * stats['delta_std']) + stats['delta_mean']
+        return _jit_predict_wm(wm.apply_fn, wm.params, stats, obs, action)
 
     def getErrorWM(self, name, wm, stats, obs, action, next_obs):
         pred_next_obs = self.getPredictionWM(wm, stats, obs, action)
@@ -377,7 +381,8 @@ class RobotController:
             return
         
         error = self.getErrorWM(active_name, wm, stats, obs, action, next_obs)
-        #[self.getErrorWM(name, wm, stats, obs, action, next_obs) for name, wm, stats in self.wms if name != active_name]
+        # Only needed for plotting WM error of all WMs
+        [self.getErrorWM(name, wm, stats, obs, action, next_obs) for name, wm, stats in self.wms if name != active_name]
 
         # Update detector
         is_drift, _, policy_performance_alert = self.detector.update(error, self.native_errors[active_name])
@@ -431,24 +436,5 @@ class RobotController:
             self.drift_indices.append(idx)
 
             # Plotting
-            '''for wm_name in self.errors:
-                plt.plot(self.errors[wm_name], label=f"{wm_name} WM errors")
-
-            plt.xlabel("Time step")
-            plt.title("WM error history")
-            plt.legend()
-            plt.tight_layout()
-            plt.show()'''
-
-            plt.plot(self.detector.stat_values, label="KS statistic")
-
-            plt.vlines(self.drift_indices,
-                ymin=min(self.detector.stat_values),
-                ymax=max(self.detector.stat_values),
-                color="red", alpha=0.6, label='Drift detection')
-
-            plt.xlabel("Time step")
-            plt.title("KS-ADWIN concept drift detector history")
-            plt.legend()
-            plt.tight_layout()
-            plt.show()
+            plots.wmErrorHistory(self)
+            plots.statisticDriftHistory(self)
