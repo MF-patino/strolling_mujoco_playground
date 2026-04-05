@@ -20,17 +20,16 @@ from worldModel.train_world_model import trainWM, load_dataset
 IMPL = "jax"
 
 class OfflineRobotController(RobotController):
-    def __init__(self, obs_shape, act_shape, initial_env=None, jit_inference=None):
-        RobotController.__init__(self, obs_shape, act_shape, initial_env, jit_inference)
-        #active_name, wm, stats = self.active_wm
-        #self.adapt_policy(active_name, "Go2StrollRoughTerrain")
+    def __init__(self, obs_shape, act_shape, initial_env=None, jit_inference=None,
+                 generatePlots = True, cmd = jp.array([1., 0., 0.])):
+        RobotController.__init__(self, obs_shape, act_shape, initial_env, jit_inference, generatePlots, cmd)
 
     def adapt_policy(self, base_policy_name):
         basePath = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
         
         print(f"--- STARTING HEADLESS ADAPTATION FROM: {base_policy_name} ---")
         
-        # 1. Setup paths and parameters
+        # Setup paths and parameters
         base_ckpt_path = basePath + "/" + POL_PATH.format(env_name=base_policy_name)
         new_policy_name = f"Adapted_{base_policy_name}_{len(self.policies)}"
         new_ckpt_path = basePath + "/" + POL_PATH.format(env_name=new_policy_name)
