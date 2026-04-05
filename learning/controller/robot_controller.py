@@ -57,7 +57,10 @@ class RobotController:
         # Histories for plotting 
         self.errors = {name: [] for name in self.env_names}
         self.rewards = {name: [] for name in self.env_names}
+        self.env_changes = []
         self.drift_indices = []
+        self.contact_history = []
+        self.policy_history =[]
 
         # KS-ADWIN detector configuration:
         # total_size=1000: 20 seconds of total memory
@@ -96,6 +99,7 @@ class RobotController:
         self.fast_update = jax.jit(train_step)
 
     def setEnv(self, env):
+        self.env_changes.append((len(self.detector.stat_values), env.name))
         self.env = env
 
     def normalizePolicyEmbeddings(self):
@@ -356,14 +360,22 @@ class RobotController:
                         self.samples2collect[next_name] += self.extra_timesteps
                     else:
                         self.sampling = False
+                        plots.plotGaitPattern(self)
                 else: # End of extra stability iteration
                     self.set_policy(prev_active_name)
                     self.sampling = False
+                    plots.plotGaitPattern(self)
 
         active_name, wm, stats = self.active_wm
+        # Fill out histories for plotting
         self.rewards[active_name].append(reward)
+        self.contact_history.append(state.info["last_contact"])
+        self.policy_history.append(active_name)
 
         if self.sampling:
+            # Needed for plotting, we append the 0 manually as we don't want to feed the dummy 0
+            # into the KS-ADWIN detection pipeline
+            self.detector.stat_values.append(0)
             self.sampled_rewards[active_name].append(reward)
 
             # When sampling batch is over for the policy, compute its new GP datapoint
@@ -386,8 +398,6 @@ class RobotController:
 
         # Update detector
         is_drift, _, policy_performance_alert = self.detector.update(error, self.native_errors[active_name])
-
-        num_detector_samples = len(self.detector.stat_values)
         
         if is_drift or policy_performance_alert:
             if policy_performance_alert:
@@ -432,8 +442,7 @@ class RobotController:
 
             self.sampling = True
 
-            idx = num_detector_samples - 1
-            self.drift_indices.append(idx)
+            self.drift_indices.append(len(self.detector.stat_values))
 
             # Plotting
             plots.wmErrorHistory(self)

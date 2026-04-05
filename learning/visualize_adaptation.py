@@ -19,6 +19,7 @@ def load_env(env_name, impl, breakLeg=False):
 
     env.jit_reset = jax.jit(env.reset)
     env.jit_step = jax.jit(env.step)
+    env.name = env_name
 
     return env
 
@@ -122,34 +123,27 @@ def main():
     '''
 
     env_name = "Go2StrollFlatTerrain"
-    #checkpoint_path = "/home/marcos/Escritorio/mujoco_playground/logs/Go2StrollFlatTerrain-20260122-183735/checkpoints/000200540160"
-    #checkpoint_path = "/home/marcos/Escritorio/mujoco_playground/logs/Go2StrollRoughTerrain-20260208-001847/checkpoints/000200540160"
 
-    env = load_env(env_name, IMPL)
+    flat_env = load_env(env_name, IMPL)
     rough_env = load_env("Go2StrollRoughTerrain", IMPL)
-    #stairs_env = load_env("Go2StrollStairs", IMPL)
     slippery_env = load_env("Go2StrollSlipperyTerrain", IMPL)
     env_broken = load_env(env_name, IMPL, True)
 
-    # TODO:
-    # PCA para embeddings?
-    # Comprobar que funciona en el G1
-
-    obs_shape, act_shape = env.observation_size, env.action_size
+    obs_shape, act_shape = flat_env.observation_size, flat_env.action_size
 
     controller = OfflineRobotController(obs_shape, act_shape, initial_env=env_name)
 
-    interactive_visualization(env, controller=controller, resetNum=1)
+    interactive_visualization(flat_env, controller=controller, resetNum=1)
+    interactive_visualization(slippery_env, controller=controller, resetNum=1)
     interactive_visualization(env_broken, controller=controller, resetNum=1)
-    interactive_visualization(env, controller=controller, resetNum=1)
+    interactive_visualization(flat_env, controller=controller, resetNum=1)
     interactive_visualization(rough_env, controller=controller, resetNum=1)
-    interactive_visualization(env, controller=controller, resetNum=1)
+    interactive_visualization(flat_env, controller=controller, resetNum=1)
+    interactive_visualization(rough_env, controller=controller, resetNum=1)
+    interactive_visualization(flat_env, controller=controller, resetNum=1)
     interactive_visualization(slippery_env, controller=controller, resetNum=1)
     interactive_visualization(rough_env, controller=controller, resetNum=1)
-    interactive_visualization(env, controller=controller, resetNum=1)
-    interactive_visualization(slippery_env, controller=controller, resetNum=1)
-    interactive_visualization(rough_env, controller=controller, resetNum=1)
-    interactive_visualization(env, controller=controller, resetNum=1)
+    interactive_visualization(flat_env, controller=controller, resetNum=1)
     interactive_visualization(rough_env, controller=controller, resetNum=2)
     interactive_visualization(slippery_env, controller=controller, resetNum=1)
 

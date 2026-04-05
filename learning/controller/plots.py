@@ -2,7 +2,9 @@
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import numpy as np
+from matplotlib.patches import Patch
 from sklearn.decomposition import TruncatedSVD
+from matplotlib.lines import Line2D
 
 def policyEmbeddings2D(controller):
 
@@ -161,5 +163,85 @@ def wmErrorHistory(controller):
     plt.xlabel("Time step")
     plt.title("WM error history")
     plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+def plotGaitPattern(controller):
+    past_steps = 250
+    last_env_change, env_name = controller.env_changes[-1]
+    start_step = last_env_change - past_steps
+
+    print("Generating Gait Pattern Plot...")
+
+    # Convert list of boolean arrays to a 2D numpy array (Time x 4)
+    contacts = np.array(controller.contact_history)
+    
+    # The Y-axis will go from 0 (bottom) to 3 (top)
+    feet_names = ["RR", "RL", "FR", "FL"] 
+    
+    fig, ax = plt.subplots(figsize=(14, 4))
+    
+    # 1. Plot the foot contacts
+    for i in range(len(feet_names)):
+        # Invert the index so FR (idx 0) is at the top (y=3)
+        y_level = 3 - i 
+        contact_bools = contacts[start_step:, i]
+        
+        # Find the start and end indices of continuous contact segments
+        # Padding with False ensures we catch segments that start at 0 or touch the end
+        padded = np.pad(contact_bools, (1, 1), mode='constant', constant_values=False)
+        diffs = np.diff(padded.astype(int))
+        
+        starts = np.where(diffs == 1)[0]
+        ends = np.where(diffs == -1)[0]
+        
+        # Create a list of (start_x, width) tuples
+        xranges =[(start, end - start) for start, end in zip(starts, ends)]
+        
+        # Plot solid rectangles. (y_level - 0.2, 0.4) means the bar is centered 
+        # on y_level and has a thickness of 0.4.
+        ax.broken_barh(xranges, (y_level - 0.2, 0.4), facecolors='black', zorder=4)
+
+    # 2. Add background colors for the active policies
+    cmap = plt.cm.get_cmap('Pastel1', len(controller.env_names))
+    
+    start_idx = 0
+    recent_policy_history = controller.policy_history[start_step:]
+    current_pol = recent_policy_history[0]
+    
+    for t in range(1, len(recent_policy_history)):
+        # If the policy changed, or we reached the end of the simulation
+        if recent_policy_history[t] != current_pol or t == len(recent_policy_history) - 1:
+            pol_idx = controller.env_names.index(current_pol)
+            # Paint the background for that duration
+            ax.axvspan(start_idx, t, facecolor=cmap(pol_idx), alpha=0.6)
+            
+            start_idx = t
+            current_pol = recent_policy_history[t]
+
+    prev_env = 'None' if len(controller.env_changes) < 2 else controller.env_changes[-2][1]
+    ax.axvline(x=past_steps, color='green', linestyle='--', linewidth=2, zorder=5)
+    # 3. Draw vertical line for drift detection
+    drifts = [idx-start_step for idx in controller.drift_indices if idx > start_step]
+    for drift in drifts:
+        ax.axvline(x=drift, color='red', linestyle='--', linewidth=2, zorder=5)
+
+    # 4. Formatting
+    ax.set_yticks([0, 1, 2, 3])
+    ax.set_yticklabels(feet_names, fontweight='bold')
+    ax.set_xlabel("Time step (50Hz)", fontsize=12)
+    ax.set_title("Gait Contact Pattern During Online Adaptation", fontsize=14)
+    
+    # Create a clean legend for the background colors
+    recent_pols = list(set(recent_policy_history))
+    legend_elements =[Patch(facecolor=cmap(controller.env_names.index(pol)), alpha=0.6, label=pol) for pol in recent_pols]
+    
+    # Add a red dashed line to the legend for the drift detector
+    legend_elements.append(Line2D([0], [0], color='red', linestyle='--', linewidth=2, label='Drift Detected'))
+    legend_elements.append(Line2D([0], [0], color='green', linestyle='--', linewidth=2, label=f'Change: {prev_env} -> {env_name}'))
+    
+    # Place legend outside the plot so it doesn't cover the gait bars
+    ax.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(1.01, 1), title="Active State")
+
     plt.tight_layout()
     plt.show()
