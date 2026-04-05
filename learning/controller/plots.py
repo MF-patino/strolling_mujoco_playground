@@ -1,7 +1,11 @@
 
+import matplotlib
+matplotlib.use('TkAgg') 
 import matplotlib.pyplot as plt
+
 import matplotlib.cm as cm
 import numpy as np
+import jax.numpy as jp
 from matplotlib.patches import Patch
 from sklearn.decomposition import TruncatedSVD
 from matplotlib.lines import Line2D
@@ -242,6 +246,84 @@ def plotGaitPattern(controller):
     
     # Place legend outside the plot so it doesn't cover the gait bars
     ax.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(1.01, 1), title="Active State")
+
+    plt.tight_layout()
+    plt.show()
+
+def plotLastGPSearchState(controller):
+    iteration, base_policy_name, chosen_policy_name, polInfo = controller.gp_states[-1][-1]
+    print(f"Generating GP Search State Plot for Iteration {iteration}...")
+
+    base_emb = controller.policy_embeddings[base_policy_name]
+
+    distances =[]
+    means = []
+    stds = []
+    names = []
+    colors =[]
+
+    # 1. Query the GP for every policy in the catalog
+    for pol_name, emb in controller.policy_embeddings.items():
+        # Calculate Cosine Distance from the base policy
+        cos_dist = 1.0 - jp.dot(emb, base_emb) / (jp.linalg.norm(emb) * jp.linalg.norm(base_emb))
+        
+        # Query the GP's current belief about this policy
+        mean, std = [(mean, std) for ucb_score, mean, std, name in polInfo if pol_name == name][0]
+        
+        distances.append(float(cos_dist))
+        means.append(float(mean[0]))
+        stds.append(float(std[0]))
+        names.append(pol_name)
+        
+        # Color-code based on status
+        if pol_name == base_policy_name:
+            colors.append('black') # The Origin
+        elif pol_name == chosen_policy_name:
+            colors.append('red')   # The one just picked by UCB
+        else:
+            colors.append('gray')
+
+    # Sort everything by distance so we can draw a continuous confidence band (optional but looks nice)
+    sorted_indices = np.argsort(distances)
+    distances = np.array(distances)[sorted_indices]
+    means = np.array(means)[sorted_indices]
+    stds = np.array(stds)[sorted_indices]
+    names = [names[i] for i in sorted_indices]
+    colors = [colors[i] for i in sorted_indices]
+
+    # Plotting
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Plot the GP's uncertainty bound (Mean ± Std) as a shaded region
+    # We use a smooth line connecting the discrete policies to visualize the "landscape"
+    ax.plot(distances, means, color='blue', alpha=0.5, linestyle='--', zorder=1)
+    ax.fill_between(distances, means - stds, means + stds, color='blue', alpha=0.15, zorder=0, label='GP Uncertainty ($\sigma$)')
+
+    # Scatter the policies
+    for i in range(len(distances)):
+        ax.errorbar(distances[i], means[i], yerr=stds[i], fmt='o', color=colors[i], 
+                    markersize=8, capsize=5, markeredgecolor='black', zorder=3)
+        
+        # Annotate the policies (staggering them slightly to avoid overlap)
+        y_offset = stds[i] + 0.5 if i % 2 == 0 else -stds[i] - 1.0
+        ax.annotate(names[i], (distances[i], means[i]), xytext=(0, y_offset), 
+                    textcoords='offset points', ha='center', fontsize=8,
+                    bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="gray", alpha=0.7))
+
+    # 4. Formatting
+    ax.set_title(f"Gaussian Process Belief Landscape (Iteration {iteration})", fontsize=14, pad=15)
+    ax.set_xlabel(f"Cosine Distance from {base_policy_name}", fontsize=12)
+    ax.set_ylabel("Predicted Reward (GP Mean)", fontsize=12)
+
+    # Custom legend
+    custom_lines = [
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='black', markersize=8),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='red', markersize=8),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='gray', markersize=8)
+    ]
+    existing_handles, existing_labels = ax.get_legend_handles_labels()
+    ax.legend(custom_lines + existing_handles,['Base Policy', 'Currently Chosen (UCB)', 'Other policies'] + existing_labels,
+              loc='upper right')
 
     plt.tight_layout()
     plt.show()

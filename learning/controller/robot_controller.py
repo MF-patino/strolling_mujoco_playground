@@ -8,10 +8,6 @@ from brax.training.acme import running_statistics
 from brax.training.agents.ppo import checkpoint
 from mujoco_playground.config import locomotion_params
 
-import matplotlib
-matplotlib.use('TkAgg') 
-import matplotlib.pyplot as plt
-
 from worldModel.common import MODELS_ROOT, WM_PATH, WM_STATS_PATH, WM_DS_PATH, POL_PATH
 from worldModel.train_world_model import create_train_state, train_step, load_dataset
 
@@ -37,8 +33,10 @@ def _jit_predict_wm(apply_fn, params, stats, obs, action):
     return obs + (norm_delta * stats['delta_std']) + stats['delta_mean']
 
 class RobotController:
-    def __init__(self, obs_shape, act_shape, initial_env=None, jit_inference=None):
-        self.cmd = jp.array([1., 0., 0.])
+    def __init__(self, obs_shape, act_shape, initial_env=None, jit_inference=None,
+                 generatePlots = True, cmd = jp.array([1., 0., 0.])):
+        self.generatePlots = generatePlots
+        self.cmd = cmd
         self.wms = []
         self.policies = {}
 
@@ -60,7 +58,8 @@ class RobotController:
         self.env_changes = []
         self.drift_indices = []
         self.contact_history = []
-        self.policy_history =[]
+        self.policy_history = []
+        self.gp_states = []
 
         # KS-ADWIN detector configuration:
         # total_size=1000: 20 seconds of total memory
@@ -103,7 +102,8 @@ class RobotController:
         self.env = env
 
     def normalizePolicyEmbeddings(self):
-        plots.policyEmbeddings3D(self)
+        if self.generatePlots:
+            plots.policyEmbeddings3D(self)
 
         if len(self.policies) > self.max_pol_emb_dim:
             print(f"Applying SVD to reduce dimensionality from {len(self.policies)}D to 4D.")
@@ -247,11 +247,11 @@ class RobotController:
         # UCB formula: Exploit (mean) + Explore (Kappa * std) * Safety constraints
 
         # It is dangerous to rollout policies that are too different together for stability reasons.
-        # With the safety constraint, the cost of transitioning from one to the next is lower.
-        # If not, the robot may switch directly from the flat policy to slippery on rough terrain, falling over.
+        # With the safety constraint, the score for transitioning from one to another is lower when the
+        # policies have little in common.
         cos_dist = 1 - jp.dot(pol_emb, active_emb) / (jp.linalg.norm(pol_emb) * jp.linalg.norm(active_emb))
-        kappa = 2.; gamma = .5; trust_region = .7
-        ucb_score = mean[0] + kappa * std[0] * jp.exp(-gamma * cos_dist) * (cos_dist < trust_region)
+        kappa = 2.; gamma = .5
+        ucb_score = mean[0] + kappa * std[0] * jp.exp(-gamma * cos_dist)
         return ucb_score, mean, std
     
     def getFinalPolicyScore(self, pol_name):
@@ -282,17 +282,17 @@ class RobotController:
         self.gp = GaussianProcessRegressor(kernel=RBF(), normalize_y=True, alpha=self.alpha+noise)
         self.gp.fit(self.X_train, self.y_train)
 
-        best_ucb = -float('inf')
-        next_name = None
+        polInfo = [self.predictPolicyScore(name, active_name) + (name,) for name in self.policies]
+        best_ucb, mean, std, next_name = max(polInfo)
         
-        for name in self.policies:
-            ucb_score, mean, std = self.predictPolicyScore(name, active_name)
-            print(f"{name} Mean: {mean[0]}±{std[0]}. Score {ucb_score}")
-            
-            if ucb_score > best_ucb:
-                best_ucb = ucb_score
-                next_name = name
+        loggingInfo = [self.iteration, active_name, next_name, polInfo]
+        if self.iteration == 1:
+            self.gp_states.append([loggingInfo])
+        else:
+            self.gp_states[-1].append(loggingInfo)
 
+        if self.generatePlots:
+            plots.plotLastGPSearchState(self)
         return next_name
 
     def adapt_policy(self, base_policy_name):
@@ -324,6 +324,7 @@ class RobotController:
 
             if self.active_wm is None:
                 if self.iteration < self.max_iterations:
+                    self.iteration += 1
                     next_name = self.getNextPolicy(prev_active_name)
                     # Forget data that will be stale in the next iteration
                     # As the policy chosen by the GP will be resampled, the mean error and std will change
@@ -339,7 +340,6 @@ class RobotController:
 
                     self.active_wm = self.wm_dict[next_name]
                     self.inference = self.policies[next_name]
-                    self.iteration += 1
 
                     print(f"Beginning iteration {self.iteration} with {next_name}.")
                 elif self.iteration == self.max_iterations:
@@ -360,11 +360,15 @@ class RobotController:
                         self.samples2collect[next_name] += self.extra_timesteps
                     else:
                         self.sampling = False
-                        plots.plotGaitPattern(self)
+                        
+                        if self.generatePlots:
+                            plots.plotGaitPattern(self)
                 else: # End of extra stability iteration
                     self.set_policy(prev_active_name)
                     self.sampling = False
-                    plots.plotGaitPattern(self)
+                    
+                    if self.generatePlots:
+                        plots.plotGaitPattern(self)
 
         active_name, wm, stats = self.active_wm
         # Fill out histories for plotting
@@ -445,5 +449,6 @@ class RobotController:
             self.drift_indices.append(len(self.detector.stat_values))
 
             # Plotting
-            plots.wmErrorHistory(self)
-            plots.statisticDriftHistory(self)
+            if self.generatePlots:
+                plots.wmErrorHistory(self)
+                plots.statisticDriftHistory(self)
