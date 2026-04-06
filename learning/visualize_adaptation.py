@@ -2,6 +2,7 @@ from mujoco_playground import registry
 
 import time
 import jax
+import jax.numpy as jp
 import numpy as np
 import mujoco
 import mujoco.viewer
@@ -127,25 +128,30 @@ def main():
     flat_env = load_env(env_name, IMPL)
     rough_env = load_env("Go2StrollRoughTerrain", IMPL)
     slippery_env = load_env("Go2StrollSlipperyTerrain", IMPL)
-    env_broken = load_env(env_name, IMPL, True)
+    env_broken = load_env(env_name, IMPL, breakLeg=True)
 
     obs_shape, act_shape = flat_env.observation_size, flat_env.action_size
 
-    controller = OfflineRobotController(obs_shape, act_shape, initial_env=env_name)
+    cmds = [jp.array([1., 0., 0.]), jp.array([.6, 0., 0.]), jp.array([.25, 0., 0.])]
+    for cmd in cmds:
+        controller = RobotController(obs_shape, act_shape, initial_env=env_name, 
+                                            generatePlots = False, cmd = cmd)
 
-    interactive_visualization(flat_env, controller=controller, resetNum=1)
-    interactive_visualization(slippery_env, controller=controller, resetNum=1)
-    interactive_visualization(env_broken, controller=controller, resetNum=1)
-    interactive_visualization(flat_env, controller=controller, resetNum=1)
-    interactive_visualization(rough_env, controller=controller, resetNum=1)
-    interactive_visualization(flat_env, controller=controller, resetNum=1)
-    interactive_visualization(rough_env, controller=controller, resetNum=1)
-    interactive_visualization(flat_env, controller=controller, resetNum=1)
-    interactive_visualization(slippery_env, controller=controller, resetNum=1)
-    interactive_visualization(rough_env, controller=controller, resetNum=1)
-    interactive_visualization(flat_env, controller=controller, resetNum=1)
-    interactive_visualization(rough_env, controller=controller, resetNum=2)
-    interactive_visualization(slippery_env, controller=controller, resetNum=1)
+        interactive_visualization(flat_env, controller=controller, resetNum=1)
+        interactive_visualization(env_broken, controller=controller, resetNum=1)
+        interactive_visualization(flat_env, controller=controller, resetNum=1)
+        interactive_visualization(slippery_env, controller=controller, resetNum=1)
+        interactive_visualization(flat_env, controller=controller, resetNum=1)
+        interactive_visualization(rough_env, controller=controller, resetNum=1)
+        interactive_visualization(flat_env, controller=controller, resetNum=1)
+        interactive_visualization(rough_env, controller=controller, resetNum=1)
+        interactive_visualization(flat_env, controller=controller, resetNum=1)
+        interactive_visualization(slippery_env, controller=controller, resetNum=1)
+        interactive_visualization(rough_env, controller=controller, resetNum=1)
+        interactive_visualization(flat_env, controller=controller, resetNum=1)
+        interactive_visualization(rough_env, controller=controller, resetNum=2)
+        interactive_visualization(slippery_env, controller=controller, resetNum=1)
+        controller.export_history(f"{cmd}.pkl")
 
 if __name__ == "__main__":
     main()

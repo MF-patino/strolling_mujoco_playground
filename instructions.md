@@ -33,6 +33,10 @@ This fork of Mujoco Playground provides a general framework for online adaptatio
     ```sh 
     python learning/visualize_adaptation.py
     ```
+* Visualizing plots: 
+    ```sh 
+    python learning/plot_graphs.py
+    ```
 * Visualizing a policy in its native environment: 
     ```sh 
     python learning/train_jax_ppo.py --env_name [env_name] --play_only=True --load_checkpoint_path [checkpoint_path]
@@ -76,9 +80,16 @@ Commands with rscope:
     python -m rscope
     ```
 
-## Pre-trained policies
+## Policy-WM pairs
 
-This is a brief catalog of all policies trained so far, as shipped in the GitHub repo 
+The online adaptation process uses pairs of policies and their respective world models to track their performance. These pairs can be found in the `model_pairs` directory.
+
+If the online adaptation system finds an environment it does not recognize, it then automatically trains and generates a new policy-WM pair for it in this folder.
+
+## Playground-trained policies (checkpoint paths)
+
+The `logs` folder contains policies trained using the Playground `learning/train_jax_ppo.py` tool. These policies were trained for testing purposes and can be used by the online adaptation system, or visualized using the aforementioned script.
+
 Policies trained from scratch:
 * Go2StrollFlatTerrain:
 ```[path_to_playground]/logs/Go2StrollFlatTerrain-20260307-205501/checkpoints```

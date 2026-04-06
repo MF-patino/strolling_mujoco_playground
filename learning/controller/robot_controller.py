@@ -97,6 +97,22 @@ class RobotController:
         # JIT compile the gradient descent logic
         self.fast_update = jax.jit(train_step)
 
+    def export_history(self, path):
+        data = {
+            "inaffinity_matrix": self.inaffinity_matrix,
+            "env_names": self.env_names,
+            "detector": self.detector,
+            "errors": self.errors,
+            "policy_history": self.policy_history,
+            "contact_history": self.contact_history,
+            "drift_indices": self.drift_indices,
+            "policy_embeddings": self.policy_embeddings,
+            "env_changes": self.env_changes,
+            "gp_states": self.gp_states 
+        }
+        with open(path, 'wb') as f:
+            pickle.dump(data, f)
+
     def setEnv(self, env):
         self.env_changes.append((len(self.detector.stat_values), env.name))
         self.env = env
