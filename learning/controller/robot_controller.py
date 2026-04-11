@@ -307,12 +307,11 @@ class RobotController:
         else:
             self.gp_states[-1].append(loggingInfo)
 
-        if self.generatePlots:
-            plots.plotLastGPSearchState(self)
         return next_name
 
     def adapt_policy(self, base_policy_name):
-        raise Exception("Method implemented in OfflineRobotController")
+        pass
+        #raise Exception("Method implemented in OfflineRobotController")
     
     def set_policy(self, pol_name):
         self.active_wm = self.wm_dict[pol_name]
@@ -379,12 +378,14 @@ class RobotController:
                         
                         if self.generatePlots:
                             plots.plotGaitPattern(self)
+                            plots.plotGPSearch(self)
                 else: # End of extra stability iteration
                     self.set_policy(prev_active_name)
                     self.sampling = False
                     
                     if self.generatePlots:
                         plots.plotGaitPattern(self)
+                        plots.plotGPSearch(self)
 
         active_name, wm, stats = self.active_wm
         # Fill out histories for plotting
