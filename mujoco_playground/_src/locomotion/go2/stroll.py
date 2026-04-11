@@ -551,8 +551,7 @@ class Stroll(go2_base.Go2Env):
     vel_xyz = feet_vel[..., :3]
     vel_norm_sq = jp.sum(jp.square(vel_xyz), axis=-1)
 
-    # Feet sensor data comes in the order given by the constant:
-    # FEET_SITES = ["FR", "FL", "RR", "RL"]
+    # The 12 leg actuators in Go2 are ordered: FL (0-2), FR (3-5), RL (6-8), RR (9-11)
     # Measures of movement of the feet pairs on the front and rear
     front_feet_prod = vel_norm_sq[..., 0] * vel_norm_sq[..., 1]
     rear_feet_prod = vel_norm_sq[..., 2] * vel_norm_sq[..., 3]
@@ -569,7 +568,7 @@ class Stroll(go2_base.Go2Env):
     # Don't reward needlessly quick feet movements
     #vel_norm_sq = jp.clip(vel_norm_sq, 0, 2*jp.sum(jp.square(commands[:2])))
 
-    # Measures of movement of the feet pairs at the same time
+    # Measures of movement of the opposite feet pairs at the same time
     opposite_prod_1 = vel_norm_sq[..., 0] * vel_norm_sq[..., 3]
     opposite_prod_2 = vel_norm_sq[..., 1] * vel_norm_sq[..., 2]
     # Move one feet pair and keep the other still

@@ -170,10 +170,14 @@ def wmErrorHistory(controller):
     plt.tight_layout()
     plt.show()
 
-def plotGaitPattern(controller):
-    past_steps = 250
-    last_env_change, env_name = controller.env_changes[-1]
-    start_step = last_env_change - past_steps
+def plotGaitPattern(controller, env_change = None):
+    if env_change is None:
+        env_change = controller.env_changes[-1]
+
+    extra_steps = 250
+    last_env_change, env_name = env_change
+    start_step = max(last_env_change - extra_steps, 0)
+    end_step = last_env_change + extra_steps
 
     print("Generating Gait Pattern Plot...")
 
@@ -189,7 +193,7 @@ def plotGaitPattern(controller):
     for i in range(len(feet_names)):
         # Invert the index so FR (idx 0) is at the top (y=3)
         y_level = 3 - i 
-        contact_bools = contacts[start_step:, i]
+        contact_bools = contacts[start_step:end_step, i]
         
         # Find the start and end indices of continuous contact segments
         # Padding with False ensures we catch segments that start at 0 or touch the end
@@ -210,7 +214,7 @@ def plotGaitPattern(controller):
     cmap = plt.cm.get_cmap('Pastel1', len(controller.env_names))
     
     start_idx = 0
-    recent_policy_history = controller.policy_history[start_step:]
+    recent_policy_history = controller.policy_history[start_step:end_step]
     current_pol = recent_policy_history[0]
     
     for t in range(1, len(recent_policy_history)):
@@ -223,10 +227,11 @@ def plotGaitPattern(controller):
             start_idx = t
             current_pol = recent_policy_history[t]
 
-    prev_env = 'None' if len(controller.env_changes) < 2 else controller.env_changes[-2][1]
-    ax.axvline(x=past_steps, color='green', linestyle='--', linewidth=2, zorder=5)
+    i = controller.env_changes.index(env_change)
+    prev_env = 'None' if i == 0 else controller.env_changes[i-1][1]
+    ax.axvline(x=last_env_change - start_step, color='green', linestyle='--', linewidth=2, zorder=5)
     # 3. Draw vertical line for drift detection
-    drifts = [idx-start_step for idx in controller.drift_indices if idx > start_step]
+    drifts = [idx-start_step for idx in controller.drift_indices if idx > start_step and idx < end_step]
     for drift in drifts:
         ax.axvline(x=drift, color='red', linestyle='--', linewidth=2, zorder=5)
 
@@ -250,80 +255,75 @@ def plotGaitPattern(controller):
     plt.tight_layout()
     plt.show()
 
-def plotLastGPSearchState(controller):
-    iteration, base_policy_name, chosen_policy_name, polInfo = controller.gp_states[-1][-1]
-    print(f"Generating GP Search State Plot for Iteration {iteration}...")
+def plotGPSearch(controller, gp_states = None):
+    # Get the sequence of iterations for the most recent drift
+    if gp_states is None:
+        gp_states = controller.gp_states[-1]
 
-    base_emb = controller.policy_embeddings[base_policy_name]
+    num_iterations = len(gp_states)
+    
+    # Create a subplot grid: 1 row, N columns
+    fig, axes = plt.subplots(num_iterations, 1, figsize=(5 * num_iterations, 5), layout="constrained")
+    axes = axes.flatten()
 
-    distances =[]
-    means = []
-    stds = []
-    names = []
-    colors =[]
+    for ax_idx, (iteration, base_policy_name, chosen_policy_name, polInfo) in enumerate(gp_states):
+        ax = axes[ax_idx]
+        base_emb = controller.policy_embeddings[base_policy_name]
 
-    # 1. Query the GP for every policy in the catalog
-    for pol_name, emb in controller.policy_embeddings.items():
-        # Calculate Cosine Distance from the base policy
-        cos_dist = 1.0 - jp.dot(emb, base_emb) / (jp.linalg.norm(emb) * jp.linalg.norm(base_emb))
-        
-        # Query the GP's current belief about this policy
-        mean, std = [(mean, std) for ucb_score, mean, std, name in polInfo if pol_name == name][0]
-        
-        distances.append(float(cos_dist))
-        means.append(float(mean[0]))
-        stds.append(float(std[0]))
-        names.append(pol_name)
-        
-        # Color-code based on status
-        if pol_name == base_policy_name:
-            colors.append('black') # The Origin
-        elif pol_name == chosen_policy_name:
-            colors.append('red')   # The one just picked by UCB
-        else:
-            colors.append('gray')
+        distances, means, stds, names, colors = [], [], [], [], []
 
-    # Sort everything by distance so we can draw a continuous confidence band (optional but looks nice)
-    sorted_indices = np.argsort(distances)
-    distances = np.array(distances)[sorted_indices]
-    means = np.array(means)[sorted_indices]
-    stds = np.array(stds)[sorted_indices]
-    names = [names[i] for i in sorted_indices]
-    colors = [colors[i] for i in sorted_indices]
+        # 1. Query GP beliefs for all policies in catalog
+        for pol_name, emb in controller.policy_embeddings.items():
+            cos_dist = 1.0 - jp.dot(emb, base_emb) / (jp.linalg.norm(emb) * jp.linalg.norm(base_emb))
+            
+            # Find the belief stored in this specific iteration's polInfo
+            mean, std = [(mean, std) for _, mean, std, name in polInfo if pol_name == name][0]
+            
+            distances.append(float(cos_dist))
+            means.append(float(mean[0]))
+            stds.append(float(std[0]))
+            names.append(pol_name)
+            
+            # Color coding
+            if pol_name == base_policy_name: colors.append('black')
+            elif pol_name == chosen_policy_name: colors.append('red')
+            else: colors.append('gray')
 
-    # Plotting
-    fig, ax = plt.subplots(figsize=(10, 6))
+        # Sort everything by distance so we can draw a continuous confidence band (optional but looks nice)
+        sorted_indices = np.argsort(distances)
+        distances = np.array(distances)[sorted_indices]
+        means = np.array(means)[sorted_indices]
+        stds = np.array(stds)[sorted_indices]
+        names = [names[i] for i in sorted_indices]
+        colors = [colors[i] for i in sorted_indices]
 
-    # Plot the GP's uncertainty bound (Mean ± Std) as a shaded region
-    # We use a smooth line connecting the discrete policies to visualize the "landscape"
-    ax.plot(distances, means, color='blue', alpha=0.5, linestyle='--', zorder=1)
-    ax.fill_between(distances, means - stds, means + stds, color='blue', alpha=0.15, zorder=0, label='GP Uncertainty ($\sigma$)')
+        # Plot the GP's uncertainty bound (Mean ± Std) as a shaded region
+        # We use a smooth line connecting the discrete policies to visualize the "landscape"
+        ax.plot(distances, means, color='blue', alpha=0.5, linestyle='--', zorder=1)
+        ax.fill_between(distances, means - stds, means + stds, color='blue', alpha=0.15, zorder=0, label='GP Uncertainty ($\sigma$)')
 
-    # Scatter the policies
-    for i in range(len(distances)):
-        ax.errorbar(distances[i], means[i], yerr=stds[i], fmt='o', color=colors[i], 
-                    markersize=8, capsize=5, markeredgecolor='black', zorder=3)
-        
-        # Annotate the policies (staggering them slightly to avoid overlap)
-        y_offset = stds[i] + 0.5 if i % 2 == 0 else -stds[i] - 1.0
-        ax.annotate(names[i], (distances[i], means[i]), xytext=(0, y_offset), 
-                    textcoords='offset points', ha='center', fontsize=8,
-                    bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="gray", alpha=0.7))
+        # Scatter the policies
+        for i in range(len(distances)):
+            ax.errorbar(distances[i], means[i], yerr=stds[i], fmt='o', color=colors[i], 
+                        markersize=8, capsize=5, markeredgecolor='black', zorder=3)
+            
+            # Annotate the policies (staggering them slightly to avoid overlap)
+            y_offset = stds[i] + 0.5 if i % 2 == 0 else -stds[i] - 1.0
+            ax.annotate(names[i], (distances[i], means[i]), xytext=(0, y_offset), 
+                        textcoords='offset points', ha='center', fontsize=8,
+                        bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="gray", alpha=0.7))
 
-    # 4. Formatting
-    ax.set_title(f"Gaussian Process Belief Landscape (Iteration {iteration})", fontsize=14, pad=15)
-    ax.set_xlabel(f"Cosine Distance from {base_policy_name}", fontsize=12)
-    ax.set_ylabel("Predicted Reward (GP Mean)", fontsize=12)
+        # 4. Formatting
+        ax.set_xlabel(f"Cosine Distance from {base_policy_name} (Iteration {iteration})", fontsize=12)
 
-    # Custom legend
+    # 3. Legend on the last plot
     custom_lines = [
         Line2D([0], [0], marker='o', color='w', markerfacecolor='black', markersize=8),
         Line2D([0], [0], marker='o', color='w', markerfacecolor='red', markersize=8),
         Line2D([0], [0], marker='o', color='w', markerfacecolor='gray', markersize=8)
     ]
-    existing_handles, existing_labels = ax.get_legend_handles_labels()
-    ax.legend(custom_lines + existing_handles,['Base Policy', 'Currently Chosen (UCB)', 'Other policies'] + existing_labels,
-              loc='upper right')
+    axes[-1].legend(custom_lines, ['Base Policy', 'Chosen', 'Other'], loc='upper right', fontsize=8)
 
-    plt.tight_layout()
+    fig.supylabel("Predicted Reward (GP Mean)", fontsize=14)
+    #plt.tight_layout()
     plt.show()
