@@ -1,12 +1,13 @@
 from mujoco_playground import registry
 
-import time
+import time, os
 import jax
 import jax.numpy as jp
 import numpy as np
 import mujoco
 import mujoco.viewer
 from controller.offline_controller import RobotController, OfflineRobotController
+from controller.plots import PLOT_DATA_DIR
 
 IMPL = "jax"
     
@@ -151,7 +152,7 @@ def main():
         interactive_visualization(flat_env, controller=controller, resetNum=1)
         interactive_visualization(rough_env, controller=controller, resetNum=2)
         interactive_visualization(slippery_env, controller=controller, resetNum=1)
-        controller.export_history(f"{cmd}.pkl")
+        controller.export_history(os.path.join(PLOT_DATA_DIR, f"{cmd}.pkl"))
 
 if __name__ == "__main__":
     main()

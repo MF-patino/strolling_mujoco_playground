@@ -9,6 +9,7 @@ import jax.numpy as jp
 from matplotlib.patches import Patch
 from sklearn.decomposition import TruncatedSVD
 from matplotlib.lines import Line2D
+PLOT_DATA_DIR = "./plotData/"
 
 def policyEmbeddings2D(controller):
 
@@ -161,8 +162,8 @@ def statisticDriftHistory(controller):
     plt.show()
 
 def wmErrorHistory(controller):
-    for wm_name in controller.errors:
-        plt.plot(controller.errors[wm_name], label=f"{wm_name} WM errors")
+    for wm_name in controller.smooth_errors:
+        plt.plot(controller.smooth_errors[wm_name], label=f"{wm_name} WM errors")
 
     plt.xlabel("Time step")
     plt.title("WM error history")

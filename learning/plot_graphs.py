@@ -1,12 +1,14 @@
 import controller.plots as plots
-import pickle
+from controller.plots import PLOT_DATA_DIR
+import pickle, os
 
 class AttrDict(dict):
     def __init__(self, *args, **kwargs):
         super(AttrDict, self).__init__(*args, **kwargs)
         self.__dict__ = self
 
-with open("[1. 0. 0.].pkl", 'rb') as f:
+plotFiles = os.listdir(PLOT_DATA_DIR)
+with open(os.path.join(PLOT_DATA_DIR, "[1. 0. 0.].pkl"), 'rb') as f:
     plotData = AttrDict(pickle.load(f))
 
 for env_change in plotData.env_changes:
