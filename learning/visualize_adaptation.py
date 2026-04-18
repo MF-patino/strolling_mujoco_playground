@@ -21,7 +21,7 @@ def load_env(env_name, impl, breakLeg=False):
 
     env.jit_reset = jax.jit(env.reset)
     env.jit_step = jax.jit(env.step)
-    env.name = env_name
+    env.name = env_name if not breakLeg else "ConstrainedKnee_" + env_name
 
     return env
 
@@ -133,9 +133,9 @@ def main():
 
     obs_shape, act_shape = flat_env.observation_size, flat_env.action_size
 
-    cmds = [jp.array([1., 0., 0.]), jp.array([.6, 0., 0.]), jp.array([.25, 0., 0.])]
+    cmds = [jp.array([1., 0., 0.]), jp.array([.7, 0., 0.]), jp.array([.4, 0., 0.]), jp.array([.25, 0., 0.])]
     for cmd in cmds:
-        controller = RobotController(obs_shape, act_shape, initial_env=env_name, 
+        controller = RobotController(obs_shape, act_shape, initial_pair="FlatTerrain", 
                                             generatePlots = False, cmd = cmd)
 
         interactive_visualization(flat_env, controller=controller, resetNum=1)

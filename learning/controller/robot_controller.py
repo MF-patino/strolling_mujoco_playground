@@ -33,7 +33,7 @@ def _jit_predict_wm(apply_fn, params, stats, obs, action):
     return obs + (norm_delta * stats['delta_std']) + stats['delta_mean']
 
 class RobotController:
-    def __init__(self, obs_shape, act_shape, initial_env=None, jit_inference=None,
+    def __init__(self, obs_shape, act_shape, initial_pair=None, jit_inference=None,
                  generatePlots = True, cmd = jp.array([1., 0., 0.])):
         self.generatePlots = generatePlots
         self.cmd = cmd
@@ -83,9 +83,9 @@ class RobotController:
         # performance to stabilize the robot
         self.extra_timesteps = 15
 
-        self.loadPolicies(initial_env, obs_shape, act_shape)
-        self.loadWorldModels(initial_env)
-        print(f"Starting up with {initial_env} world model & policy.")
+        self.loadPolicies(initial_pair, obs_shape, act_shape)
+        self.loadWorldModels(initial_pair)
+        print(f"Starting up with {initial_pair} world model & policy.")
 
         self.native_errors = {}
         self.inaffinity_matrix = jp.stack([self.computePolicyEmbedding(name) for name in self.env_names])
@@ -149,7 +149,7 @@ class RobotController:
         for pol_name in self.policy_embeddings:
             print(f"{pol_name}: {self.policy_embeddings[pol_name]}")
 
-    def loadWorldModels(self, initial_env):
+    def loadWorldModels(self, initial_pair):
         self.wm_dict = {}
 
         for env_name in self.env_names:
@@ -171,14 +171,14 @@ class RobotController:
             self.wm_dict[env_name] = wm_info
 
         # The active world model is the one corresponding to the environment we launch the robot in
-        self.active_wm = self.wm_dict[initial_env]
+        self.active_wm = self.wm_dict[initial_pair]
 
-    def loadPolicies(self, initial_env, obs_shape, act_shape):
+    def loadPolicies(self, initial_pair, obs_shape, act_shape):
         basePath = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
         # Load network parameters
         # They are the same for all environments
-        self.ppo_params = locomotion_params.brax_ppo_config(initial_env, IMPL)
+        self.ppo_params = locomotion_params.brax_ppo_config("Go2StrollFlatTerrain", IMPL)
 
         for env_name in self.env_names:
             checkpoint_path = basePath + "/" + POL_PATH.format(env_name=env_name)
@@ -210,7 +210,7 @@ class RobotController:
             self.policies[env_name] = jax.jit(inference_fn)
 
         # The active policy is the one corresponding to the environment we launch the robot in
-        self.inference = self.policies[initial_env]
+        self.inference = self.policies[initial_pair]
 
 
     def getPredictionWM(self, wm, stats, obs, action):
@@ -295,16 +295,16 @@ class RobotController:
     def getNextPolicy(self, active_name):
         # Fit the GP with the new real-world data
         noise = 1e-06
+        
+        # Even with normalize_y=True the alpha vector has to be normalized
+        # But when y_var is 0, scikit doesn't scale the data, so we divide by 1.0
         y_var = float(jp.var(self.y_train))
-        
-        # 2. Prevent division by zero in Iteration 1 (where variance is 0.0)
-        # When y_var is 0, scikit-learn doesn't scale the data, so we divide by 1.0
         y_var_safe = 1.0 if y_var == 0.0 else y_var
-        
-        # 3. NORMALIZE ALPHA! (Divide raw variance by the dataset variance)
         normalized_alpha = (self.alpha + noise) / y_var_safe
-        max_dist = jp.sqrt(min(len(self.policies), self.max_pol_emb_dim))
+
         prior_variance = float(max(1.0, jp.max(normalized_alpha) * 2.0))
+
+        max_dist = jp.sqrt(min(len(self.policies), self.max_pol_emb_dim))
         kernel = C(prior_variance, constant_value_bounds="fixed") * RBF(length_scale=max_dist/2, length_scale_bounds=(1e-2, max_dist))
 
         self.gp = GaussianProcessRegressor(kernel=kernel, normalize_y=True, alpha=normalized_alpha)
@@ -322,8 +322,7 @@ class RobotController:
         return next_name
 
     def adapt_policy(self, base_policy_name):
-        pass
-        #raise Exception("Method implemented in OfflineRobotController")
+        raise Exception("Method implemented in OfflineRobotController")
 
     def set_policy(self, pol_name):
         self.active_wm = self.wm_dict[pol_name]
@@ -444,8 +443,15 @@ class RobotController:
             adapt = policy_performance_alert and not is_drift and len(self.drift_indices) > 0
             # Adaptation is also needed if there was a change alert and we only have 1 policy
             if len(self.env_names) == 1 or adapt:
-                self.adapt_policy(active_name)
-                return
+                try:
+                    self.adapt_policy(active_name)
+                    return
+                except:
+                    # If the adapt_policy method is not implemented, then we are deploying the robot
+                    # with all needed policies loaded in-simulation or in the real world.
+                    # Thus we have entered a failure mode, as the GP search did not find the optimal policy.
+                    # We try again with the GP search in case it was bad luck.
+                    pass
 
             self.sampled_errors = {name: [] for name, _, _ in self.wms}
 
@@ -454,7 +460,7 @@ class RobotController:
             # consecutive, very big error samples are enough signal for it to fire.
             # IF not performance alert: we can assign last obtained errors so that we may start the search process
             # with a bit more useful data.
-            init_samples = 2 if policy_performance_alert else self.increment_samples
+            init_samples = 2 if policy_performance_alert else self.increment_samples-1
             samples = self.errors[active_name][-init_samples:]
             self.sampled_errors[active_name] = samples
 

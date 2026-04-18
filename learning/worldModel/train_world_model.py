@@ -8,7 +8,7 @@ import os
 import glob
 import pickle
 
-from worldModel.common import WM_DS_PATH, WM_PATH, WM_STATS_PATH, ALL_ENVS
+from worldModel.common import WM_DS_PATH, WM_PATH, WM_STATS_PATH, MODELS_ROOT
 
 # Configuration
 HIDDEN_DIMS = [512, 256, 128]
@@ -201,7 +201,7 @@ def trainWM(env_name):
             
 def main():
     # All world models are trained from scratch
-    for env in ALL_ENVS:
+    for env in os.listdir(MODELS_ROOT):
         trainWM(env)
     
 

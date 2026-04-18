@@ -84,7 +84,7 @@ Commands with rscope:
 
 The online adaptation process uses pairs of policies and their respective world models to track their performance. These pairs can be found in the `model_pairs` directory.
 
-If the online adaptation system finds an environment it does not recognize, it then automatically trains and generates a new policy-WM pair for it in this folder.
+If the online adaptation system finds an environment it does not recognize, it then automatically trains and generates a new policy-WM pair for it in this folder. These adapted pairs contain the keyword "AdaptedFrom" in their folder names.
 
 ## Playground-trained policies (checkpoint paths)
 

@@ -14,15 +14,15 @@ from mujoco_playground import wrapper
 from brax.training.agents.ppo import checkpoint
 from brax.training.acme import running_statistics
 
-from worldModel.common import ALL_ENVS, WM_PATH, WM_STATS_PATH, WM_DS_PATH, POL_PATH
+from worldModel.common import WM_DS_PATH, POL_PATH
 from worldModel.rollout_saver import WorldModelRolloutSaver
 from worldModel.train_world_model import trainWM, load_dataset
 IMPL = "jax"
 
 class OfflineRobotController(RobotController):
-    def __init__(self, obs_shape, act_shape, initial_env=None, jit_inference=None,
+    def __init__(self, obs_shape, act_shape, initial_pair=None, jit_inference=None,
                  generatePlots = True, cmd = jp.array([1., 0., 0.])):
-        RobotController.__init__(self, obs_shape, act_shape, initial_env, jit_inference, generatePlots, cmd)
+        RobotController.__init__(self, obs_shape, act_shape, initial_pair, jit_inference, generatePlots, cmd)
 
     def adapt_policy(self, base_policy_name):
         basePath = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
@@ -31,7 +31,7 @@ class OfflineRobotController(RobotController):
         
         # Setup paths and parameters
         base_ckpt_path = basePath + "/" + POL_PATH.format(env_name=base_policy_name)
-        new_policy_name = f"Adapted_{base_policy_name}_{len(self.policies)}"
+        new_policy_name = f"{len(self.policies)}_AdaptedFrom_{base_policy_name}"
         new_ckpt_path = basePath + "/" + POL_PATH.format(env_name=new_policy_name)
 
         self.ppo_params.num_timesteps = 200_000_000
