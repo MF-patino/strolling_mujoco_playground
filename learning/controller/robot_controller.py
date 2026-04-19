@@ -322,7 +322,7 @@ class RobotController:
         return next_name
 
     def adapt_policy(self, base_policy_name):
-        raise Exception("Method implemented in OfflineRobotController")
+        raise NotImplementedError("Method implemented in OfflineRobotController")
 
     def set_policy(self, pol_name):
         self.active_wm = self.wm_dict[pol_name]
@@ -446,7 +446,9 @@ class RobotController:
                 try:
                     self.adapt_policy(active_name)
                     return
-                except:
+                except NotImplementedError:
+                    if len(self.env_names) == 1:
+                        return
                     # If the adapt_policy method is not implemented, then we are deploying the robot
                     # with all needed policies loaded in-simulation or in the real world.
                     # Thus we have entered a failure mode, as the GP search did not find the optimal policy.

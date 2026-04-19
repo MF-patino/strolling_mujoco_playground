@@ -128,18 +128,6 @@ class Stroll(go2_base.Go2Env):
         config=config,
         config_overrides=config_overrides,
     )
-    
-    if self._config.broken_leg:
-        # The 12 actuators in Go2 are ordered: FL (0-2), FR (3-5), RL (6-8), RR (9-11)
-        # We break the Rear Right (RR) knee (joint 11)
-        for act_id in [11]:
-            # Setting actuators to 90% of their output torque has a massive qualitative impact
-            self.mj_model.actuator_gear[act_id, 0] *= 0.9
-            self.mj_model.actuator_gainprm[act_id] *= 0.9
-            self.mj_model.actuator_biasprm[act_id] *= 0.9
-            
-        # Send the hacked CPU model back to the JAX GPU model
-        self._mjx_model = mjx.put_model(self.mj_model)
 
     self._post_init()
 
@@ -274,6 +262,11 @@ class Stroll(go2_base.Go2Env):
     if self._config.pert_config.enable:
       state = self._maybe_apply_perturbation(state)
     # state = self._reset_if_outside_bounds(state)
+
+    # The 12 actuators in Go2 are ordered: FL (0-2), FR (3-5), RL (6-8), RR (9-11)
+    # We break the Rear Right (RR) knee (joint 11)
+    if self._config.broken_leg:
+      action = action.at[11].set(0.0)
 
     motor_targets = self._default_pose + action * self._config.action_scale
     data = mjx_env.step(

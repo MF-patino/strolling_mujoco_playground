@@ -138,7 +138,6 @@ class OfflineRobotController(RobotController):
 
         # Create a new WM error category
         self.errors[pair_name] = []
-        self.rewards[pair_name] = []
 
         # Include models in internal data structures
         self.wms.append(wm_info)
