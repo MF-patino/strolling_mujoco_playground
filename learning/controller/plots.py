@@ -161,13 +161,30 @@ def statisticDriftHistory(controller):
     plt.tight_layout()
     plt.show()
 
-def wmErrorHistory(controller):
-    for wm_name in controller.smooth_errors:
-        plt.plot(controller.smooth_errors[wm_name], label=f"{wm_name} WM errors")
+def wmErrorHistory(controller, env_change = None):
+    if env_change is None:
+        env_change = controller.env_changes[-1]
 
+    extra_steps = 250
+    last_env_change, env_name = env_change
+    start_step = max(last_env_change - extra_steps, 0)
+    end_step = last_env_change + extra_steps
+
+    i = controller.env_changes.index(env_change)
+    prev_env = 'None' if i == 0 else controller.env_changes[i-1][1]
+    fig, ax = plt.subplots(figsize=(14, 4))
+    ax.axvline(x=last_env_change - start_step, color='green', linestyle='--', linewidth=2, zorder=5)
+
+    legend_elements = []
+    for wm_name in controller.smooth_errors:
+        legend_elements.append(ax.plot(controller.smooth_errors[wm_name][start_step:end_step], label=f"{wm_name} WM errors")[0])
+
+    legend_elements.append(Line2D([0], [0], color='green', linestyle='--', linewidth=2, label=f'Change: {prev_env} -> {env_name}'))
+    
+    # Place legend outside the plot
+    ax.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(1.01, 1), title="Legend")
     plt.xlabel("Time step")
     plt.title("WM error history")
-    plt.legend()
     plt.tight_layout()
     plt.show()
 
