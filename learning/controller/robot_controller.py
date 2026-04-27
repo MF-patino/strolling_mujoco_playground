@@ -50,10 +50,10 @@ class RobotController:
         if not self.deploy:
             return
 
-        self.env_names = os.listdir(MODELS_ROOT)
+        self.pol_names = os.listdir(MODELS_ROOT)
 
         # Histories for plotting
-        self.smooth_errors = {name: [] for name in self.env_names}
+        self.smooth_errors = {name: [] for name in self.pol_names}
         self.env_changes = []
         self.drift_indices = []
         self.contact_history = []
@@ -63,10 +63,10 @@ class RobotController:
         # KS-ADWIN detector configuration:
         # total_size=1000: 20 seconds of total memory
         # window_size=100: Detect changes based on the last 2 seconds of data
-        self.detector = KSDriftDetector(total_size=1000, window_size=100, adwin_delta=.1)
+        self.detector = KSDriftDetector(total_size=1000, window_size=100, adwin_delta=.01)
 
         # GP search parameters:
-        self.errors = {name: [] for name in self.env_names}
+        self.errors = {name: [] for name in self.pol_names}
         # Should converge after 5 iterations (empirically tested)
         self.max_iterations = 5
         self.sampling = False
@@ -83,16 +83,23 @@ class RobotController:
         # performance to stabilize the robot
         self.extra_timesteps = 15
 
-        self.loadPolicies(initial_pair, obs_shape, act_shape)
-        self.loadWorldModels(initial_pair)
+        self.loadPolicies(obs_shape, act_shape)
+        self.loadWorldModels()
+
+        if self.policies.get(initial_pair):
+            self.set_policy(initial_pair)
+
         print(f"Starting up with {initial_pair} world model & policy.")
 
         self.native_errors = {}
-        self.inaffinity_matrix = jp.stack([self.computePolicyEmbedding(name) for name in self.env_names])
-        print(f"Raw inaffinity matrix:\n{self.inaffinity_matrix}")
+        if len(self.pol_names) > 0:
+            self.inaffinity_matrix = jp.stack([self.computePolicyEmbedding(name) for name in self.pol_names])
+            print(f"Raw inaffinity matrix:\n{self.inaffinity_matrix}")
 
-        if len(self.env_names) > 1:
+        if len(self.pol_names) > 1:
             self.normalizePolicyEmbeddings()
+        elif len(self.pol_names) == 1:
+            self.set_policy(self.pol_names[0])
 
         # JIT compile the gradient descent logic
         self.fast_update = jax.jit(train_step)
@@ -100,7 +107,7 @@ class RobotController:
     def export_history(self, path):
         data = {
             "inaffinity_matrix": self.inaffinity_matrix,
-            "env_names": self.env_names,
+            "pol_names": self.pol_names,
             "detector": self.detector,
             "smooth_errors": self.smooth_errors,
             "policy_history": self.policy_history,
@@ -117,12 +124,16 @@ class RobotController:
         self.env_changes.append((len(self.detector.stat_values), env.name))
         self.env = env
 
+        if len(self.pol_names) == 0:
+            self.adapt_policy(None)
+            self.set_policy(self.pol_names[0])
+
     def normalizePolicyEmbeddings(self):
         if self.generatePlots:
             plots.policyEmbeddings3D(self)
 
-        if len(self.policies) > self.max_pol_emb_dim:
-            print(f"Applying SVD to reduce dimensionality from {len(self.policies)}D to 4D.")
+        if len(self.pol_names) > self.max_pol_emb_dim:
+            print(f"Applying SVD to reduce dimensionality from {len(self.pol_names)}D to 4D.")
             # Extract the top 4 principal components that explain the most variance
             reducer = TruncatedSVD(n_components=self.max_pol_emb_dim)
             inaffinity_matrix = reducer.fit_transform(self.inaffinity_matrix)
@@ -142,17 +153,17 @@ class RobotController:
         norm_mat = inaffinity_matrix / jp.linalg.norm(inaffinity_matrix, axis=1, keepdims=True)
 
         self.policy_embeddings = {
-            name: embedding for name, embedding in zip(self.env_names, norm_mat)
+            name: embedding for name, embedding in zip(self.pol_names, norm_mat)
         }
 
         print(f"Normalized policy embeddings:")
         for pol_name in self.policy_embeddings:
             print(f"{pol_name}: {self.policy_embeddings[pol_name]}")
 
-    def loadWorldModels(self, initial_pair):
+    def loadWorldModels(self):
         self.wm_dict = {}
 
-        for env_name in self.env_names:
+        for env_name in self.pol_names:
             # Load Pre-trained Weights
             with open(WM_PATH.format(env_name=env_name), 'rb') as f:
                 params = pickle.load(f)
@@ -170,17 +181,14 @@ class RobotController:
             self.wms.append(wm_info)
             self.wm_dict[env_name] = wm_info
 
-        # The active world model is the one corresponding to the environment we launch the robot in
-        self.active_wm = self.wm_dict[initial_pair]
-
-    def loadPolicies(self, initial_pair, obs_shape, act_shape):
+    def loadPolicies(self, obs_shape, act_shape):
         basePath = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
         # Load network parameters
         # They are the same for all environments
         self.ppo_params = locomotion_params.brax_ppo_config("Go2StrollFlatTerrain", IMPL)
 
-        for env_name in self.env_names:
+        for env_name in self.pol_names:
             checkpoint_path = basePath + "/" + POL_PATH.format(env_name=env_name)
 
             normalize = lambda x, y: x
@@ -208,9 +216,6 @@ class RobotController:
 
             inference_fn = make_inference_fn(params, deterministic=True)
             self.policies[env_name] = jax.jit(inference_fn)
-
-        # The active policy is the one corresponding to the environment we launch the robot in
-        self.inference = self.policies[initial_pair]
 
 
     def getPredictionWM(self, wm, stats, obs, action):
@@ -246,7 +251,7 @@ class RobotController:
         ])
         mean_errors = jp.mean(errors, axis=1)
 
-        env_index = self.env_names.index(env_name)
+        env_index = self.pol_names.index(env_name)
         # Compute the extra "surprise" by subtracting the baseline noise
         baseline_error = mean_errors[env_index]
         embedding = jp.abs(mean_errors - baseline_error)
@@ -304,7 +309,7 @@ class RobotController:
 
         prior_variance = float(max(1.0, jp.max(normalized_alpha) * 2.0))
 
-        max_dist = jp.sqrt(min(len(self.policies), self.max_pol_emb_dim))
+        max_dist = jp.sqrt(min(len(self.pol_names), self.max_pol_emb_dim))
         kernel = C(prior_variance, constant_value_bounds="fixed") * RBF(length_scale=max_dist/2, length_scale_bounds=(1e-2, max_dist))
 
         self.gp = GaussianProcessRegressor(kernel=kernel, normalize_y=True, alpha=normalized_alpha)
@@ -442,12 +447,12 @@ class RobotController:
             # at this point.
             adapt = policy_performance_alert and not is_drift and len(self.drift_indices) > 0
             # Adaptation is also needed if there was a change alert and we only have 1 policy
-            if len(self.env_names) == 1 or adapt:
+            if len(self.pol_names) == 1 or adapt:
                 try:
                     self.adapt_policy(active_name)
                     return
                 except NotImplementedError:
-                    if len(self.env_names) == 1:
+                    if len(self.pol_names) == 1:
                         return
                     # If the adapt_policy method is not implemented, then we are deploying the robot
                     # with all needed policies loaded in-simulation or in the real world.

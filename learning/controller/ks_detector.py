@@ -5,7 +5,7 @@ import numpy as np
 
 class KSDriftDetector:
     def __init__(self, total_size=1000, window_size=250, adwin_delta=1e-3, 
-                 performance_alert_threshold=1e-4, hertz=50):
+                 performance_alert_threshold=1e-5, hertz=50):
         """
         KS-based drift detector with ADWIN on the KS statistic.
 
@@ -41,7 +41,8 @@ class KSDriftDetector:
 
         # If the slightest negative perturbation is detected, check if
         # error distributions are different
-        if mean_native_error < np.mean(last_errors):
+        _, p_value = ks_2samp(native_errors, last_errors)
+        if len(last_errors) > 10 and mean_native_error < np.mean(last_errors):
             # Here the KS test requires a high amount of evidence/certainty
             # to declare that the policy is out of its environment AND experiencing
             # instabilities that could lead to the robot falling over

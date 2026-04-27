@@ -3,6 +3,7 @@ import os
 
 import jax
 import jax.numpy as jp
+import numpy as np
 
 from brax.training.agents.ppo import train as ppo
 from brax.training.agents.ppo import networks as ppo_networks
@@ -14,9 +15,11 @@ from mujoco_playground import wrapper
 from brax.training.agents.ppo import checkpoint
 from brax.training.acme import running_statistics
 
-from worldModel.common import WM_DS_PATH, POL_PATH
+from worldModel.common import WM_DS_PATH, POL_PATH, MODELS_ROOT
 from worldModel.rollout_saver import WorldModelRolloutSaver
 from worldModel.train_world_model import trainWM, load_dataset
+
+from controller.plots import PLOT_DATA_DIR, TRAIN_DATA_SUBDIR
 IMPL = "jax"
 
 class OfflineRobotController(RobotController):
@@ -27,14 +30,22 @@ class OfflineRobotController(RobotController):
     def adapt_policy(self, base_policy_name):
         basePath = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
         
-        print(f"--- STARTING HEADLESS ADAPTATION FROM: {base_policy_name} ---")
-        
+        print("--- STARTING HEADLESS ADAPTATION FROM " + (base_policy_name if base_policy_name else "SCRATCH") + " ---")
+
         # Setup paths and parameters
-        base_ckpt_path = basePath + "/" + POL_PATH.format(env_name=base_policy_name)
-        new_policy_name = f"{len(self.policies)}_AdaptedFrom_{base_policy_name}"
+        base_ckpt_path = basePath + "/" + POL_PATH.format(env_name=base_policy_name) if base_policy_name else None
+        new_policy_name = str(len(os.listdir(MODELS_ROOT)))
+        if base_policy_name:
+            new_policy_name += "_AdaptedFrom_" + base_policy_name
+
         new_ckpt_path = basePath + "/" + POL_PATH.format(env_name=new_policy_name)
 
-        self.ppo_params.num_timesteps = 200_000_000
+        # Setup logs folder
+        plot_dir = os.path.join(basePath, PLOT_DATA_DIR, TRAIN_DATA_SUBDIR)
+        os.makedirs(plot_dir, exist_ok=True)
+        plot_file_path = os.path.join(plot_dir, f"{new_policy_name}.npz")
+
+        self.ppo_params.num_timesteps = 85_000_000
         self.ppo_params.num_evals = int(self.ppo_params.num_timesteps/1_000_000)
         
         network_factory = functools.partial(ppo_networks.make_ppo_networks, **self.ppo_params.network_factory)
@@ -45,6 +56,11 @@ class OfflineRobotController(RobotController):
             # This continuously grabs the latest network weights during training
             captured_params[0] = params
 
+        training_history = {
+            'steps': [],
+            'reward_mean': [],
+            'reward_std':[]
+        }
         # Convergence Checker (progress_fn)
         best_reward = 0
         evals_since_best = 0
@@ -52,19 +68,26 @@ class OfflineRobotController(RobotController):
         def progress_fn(num_steps, metrics):
             nonlocal best_reward, evals_since_best
 
-            reward = metrics.get('eval/episode_reward', 0.0)
-            print(f"Step {num_steps}: Reward = {reward:.2f}")
+            reward_mean = metrics.get('eval/episode_reward', 0.0)
+            reward_std = metrics.get('eval/episode_reward_std', 0.0)
+            
+            training_history['steps'].append(num_steps)
+            training_history['reward_mean'].append(reward_mean)
+            training_history['reward_std'].append(reward_std)
+
+            print(f"Step {num_steps}: Reward = {reward_mean:.2f} ± {reward_std:.2f}")
             
             # Early stopping logic for checking convergence
-            if reward > best_reward:
-                best_reward = reward
+            if reward_mean > best_reward:
+                best_reward = reward_mean
                 evals_since_best = 0
             else:
                 evals_since_best += 1
 
-            if evals_since_best > 5:
-                print(f"Convergence reached at step {num_steps}!")
-                raise StopIteration("Converged") # Hack to cleanly break Brax's jax.lax.scan loop
+            if evals_since_best > 10:
+                pass
+                #print(f"Convergence reached at step {num_steps}!")
+                #raise StopIteration("Converged") # Hack to cleanly break Brax's jax.lax.scan loop
 
         # Train the Policy offline (This will block the viewer)
         final_params = None
@@ -89,7 +112,14 @@ class OfflineRobotController(RobotController):
                 self.env.observation_size, self.env.action_size, preprocess_observations_fn=normalize
             )
             make_inference_fn = ppo_networks.make_inference_fn(ppo_network)
-
+        
+        print(f"Saving training history for plotting to: {plot_file_path}")
+        np.savez_compressed(
+            plot_file_path,
+            steps=np.array(training_history['steps']),
+            reward_mean=np.array(training_history['reward_mean']),
+            reward_std=np.array(training_history['reward_std'])
+        )
         print(f"Saving adapted policy to: {new_ckpt_path}")
         # Ensure the target directory exists before saving
         os.makedirs(new_ckpt_path, exist_ok=True)
@@ -115,7 +145,7 @@ class OfflineRobotController(RobotController):
         wm_saver = WorldModelRolloutSaver(
             env=self.env,
             episode_length=self.ppo_params.episode_length,
-            num_envs=64,
+            num_envs=128,
             data_dir=WM_DS_PATH.format(env_name=new_policy_name),
             deterministic=False,
         )
@@ -150,7 +180,7 @@ class OfflineRobotController(RobotController):
         # matrix that are absent (one extra column to the right, an extra row downwards)
         _, wm_state, wm_stats = wm_info
         new_column = []
-        for env_name in self.env_names:
+        for env_name in self.pol_names:
             datasetPath = WM_DS_PATH.format(env_name=env_name)
             obs_data, act_data, next_data = load_dataset(datasetPath)
             
@@ -162,15 +192,21 @@ class OfflineRobotController(RobotController):
             
         # Reshape to column vector (N, 1) and append to the existing matrix (N, N) -> (N, N+1)
         new_column = jp.array(new_column).reshape(-1, 1)
-        updated_embeddings = jp.hstack([self.inaffinity_matrix, new_column])
 
-        # Compute the complete embedding for the new policy
-        self.env_names.append(pair_name)
-        new_embedding = self.computePolicyEmbedding(pair_name)
+        self.pol_names.append(pair_name)
+        if len(self.pol_names) == 1:
+            self.inaffinity_matrix = jp.stack([self.computePolicyEmbedding(name) for name in self.pol_names])
+        else:
+            updated_embeddings = jp.hstack([self.inaffinity_matrix, new_column])
 
-        self.inaffinity_matrix = jp.vstack([updated_embeddings, new_embedding])
+            # Compute the complete embedding for the new policy
+            new_embedding = self.computePolicyEmbedding(pair_name)
+
+            self.inaffinity_matrix = jp.vstack([updated_embeddings, new_embedding])
+
         print(f"Adjusted raw inaffinity matrix:\n{self.inaffinity_matrix}")
 
         # Re-normalize the new inaffinity matrix to project all points onto the hypersphere
-        self.normalizePolicyEmbeddings()
+        if len(self.pol_names) > 1:
+            self.normalizePolicyEmbeddings()
         

@@ -1,5 +1,5 @@
 
-import matplotlib
+import matplotlib, os
 matplotlib.use('TkAgg') 
 import matplotlib.pyplot as plt
 
@@ -9,7 +9,37 @@ import jax.numpy as jp
 from matplotlib.patches import Patch
 from sklearn.decomposition import TruncatedSVD
 from matplotlib.lines import Line2D
-PLOT_DATA_DIR = "./plotData/"
+PLOT_DATA_DIR = "plotData"
+TRAIN_DATA_SUBDIR = "training"
+
+def transferLearningComparison(env_name, pol_name, base_pol_name):
+    plot_dir = os.path.join(PLOT_DATA_DIR, TRAIN_DATA_SUBDIR)
+    transfer_data = np.load(os.path.join(plot_dir, f"{pol_name}.npz"))
+    scratch_data = np.load(os.path.join(plot_dir, f"{base_pol_name}.npz"))
+    
+    limit_evals = 75
+    steps = transfer_data['steps'][:limit_evals]
+    means = transfer_data['reward_mean'][:limit_evals]
+    stds = transfer_data['reward_std'][:limit_evals]
+    plt.figure(figsize=(8, 5))
+
+    # Plot Transfer Learning
+    plt.plot(steps, means, label="Fine-tuned from Flat", color='blue')
+    plt.fill_between(steps, means - stds, means + stds, alpha=0.2, color='blue')
+
+    # Plot From Scratch
+    steps = scratch_data['steps'][:limit_evals]
+    means = scratch_data['reward_mean'][:limit_evals]
+    stds = scratch_data['reward_std'][:limit_evals]
+    plt.plot(steps, means, label="Trained from Scratch", color='red')
+    plt.fill_between(steps, means - stds, means + stds, alpha=0.2, color='red')
+
+    plt.title(f"{env_name}: Transfer Learning vs. Training from Scratch")
+    plt.xlabel("Environment Steps")
+    plt.ylabel("Mean Episode Reward")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
 
 def policyEmbeddings2D(controller):
 
@@ -31,10 +61,10 @@ def policyEmbeddings2D(controller):
     fig, ax = plt.subplots(figsize=(8, 8))
     
     # Get a distinct colormap for the policies
-    colors = cm.get_cmap('tab10', len(controller.env_names))
+    colors = cm.get_cmap('tab10', len(controller.pol_names))
 
     # 4. Scatter and Annotate each policy
-    for i, env_name in enumerate(controller.env_names):
+    for i, env_name in enumerate(controller.pol_names):
         x, y = coords_2d_norm[i, 0], coords_2d_norm[i, 1]
         
         # Draw the point
@@ -96,7 +126,7 @@ def policyEmbeddings3D(controller):
     ax = fig.add_subplot(111, projection='3d')
     
     # Get a distinct colormap for the policies
-    colors = cm.get_cmap('tab10', len(controller.env_names))
+    colors = cm.get_cmap('tab10', len(controller.pol_names))
 
     # 4. Draw the translucent 3D Unit Sphere
     u = np.linspace(0, 2 * np.pi, 60)
@@ -110,7 +140,7 @@ def policyEmbeddings3D(controller):
     ax.plot_wireframe(x_sphere, y_sphere, z_sphere, color='gray', alpha=0.1, linewidth=0.5)
 
     # 5. Scatter and Annotate each policy
-    for i, env_name in enumerate(controller.env_names):
+    for i, env_name in enumerate(controller.pol_names):
         x, y, z = coords_3d_norm[i, 0], coords_3d_norm[i, 1], coords_3d_norm[i, 2]
         
         # Draw the point on the sphere surface
@@ -229,7 +259,7 @@ def plotGaitPattern(controller, env_change = None):
         ax.broken_barh(xranges, (y_level - 0.2, 0.4), facecolors='black', zorder=4)
 
     # 2. Add background colors for the active policies
-    cmap = plt.cm.get_cmap('Pastel1', len(controller.env_names))
+    cmap = plt.cm.get_cmap('Pastel1', len(controller.pol_names))
     
     start_idx = 0
     recent_policy_history = controller.policy_history[start_step:end_step]
@@ -238,7 +268,7 @@ def plotGaitPattern(controller, env_change = None):
     for t in range(1, len(recent_policy_history)):
         # If the policy changed, or we reached the end of the simulation
         if recent_policy_history[t] != current_pol or t == len(recent_policy_history) - 1:
-            pol_idx = controller.env_names.index(current_pol)
+            pol_idx = controller.pol_names.index(current_pol)
             # Paint the background for that duration
             ax.axvspan(start_idx, t, facecolor=cmap(pol_idx), alpha=0.6)
             
@@ -261,7 +291,7 @@ def plotGaitPattern(controller, env_change = None):
     
     # Create a clean legend for the background colors
     recent_pols = list(set(recent_policy_history))
-    legend_elements =[Patch(facecolor=cmap(controller.env_names.index(pol)), alpha=0.6, label=pol) for pol in recent_pols]
+    legend_elements =[Patch(facecolor=cmap(controller.pol_names.index(pol)), alpha=0.6, label=pol) for pol in recent_pols]
     
     # Add a red dashed line to the legend for the drift detector
     legend_elements.append(Line2D([0], [0], color='red', linestyle='--', linewidth=2, label='Drift Detected'))
