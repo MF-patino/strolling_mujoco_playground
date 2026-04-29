@@ -104,7 +104,7 @@ def policyEmbeddings2D(controller):
 def policyEmbeddings3D(controller):
     print("Generating 3D Latent Space Sphere Plot...")
 
-    # 1. Reduce the raw inaffinity matrix strictly to 3D
+    # Reduce the raw inaffinity matrix strictly to 3D
     # (Make sure we have at least 3 policies to do a 3D projection)
     n_components = min(3, controller.inaffinity_matrix.shape[1])
     reducer_3d = TruncatedSVD(n_components=n_components)
@@ -117,18 +117,22 @@ def policyEmbeddings3D(controller):
     if coords_3d.shape[1] < 3:
         coords_3d = np.pad(coords_3d, ((0, 0), (0, 3 - coords_3d.shape[1])), mode='constant')
 
-    # 2. L2 Normalize the 3D coordinates so they lie exactly on a 3D Unit Sphere
+    # L2 Normalize the 3D coordinates so they lie exactly on a 3D Unit Sphere
     norms = np.linalg.norm(coords_3d, axis=1, keepdims=True)
     coords_3d_norm = coords_3d / (norms + 1e-8)
 
-    # 3. Figure Setup
+    # Figure Setup
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection='3d')
     
     # Get a distinct colormap for the policies
-    colors = cm.get_cmap('tab10', len(controller.pol_names))
+    # Extract unique base domains (target domains) from the policy names
+    base_names = [name.split("_AdaptedFrom_")[0] for name in controller.pol_names]
+    unique_base_names = list(set(base_names))
+    cmap = cm.get_cmap('tab10', len(unique_base_names))
+    domain_colors = {domain: cmap(i) for i, domain in enumerate(unique_base_names)}
 
-    # 4. Draw the translucent 3D Unit Sphere
+    # Draw the translucent 3D Unit Sphere
     u = np.linspace(0, 2 * np.pi, 60)
     v = np.linspace(0, np.pi, 60)
     x_sphere = np.outer(np.cos(u), np.sin(v))
@@ -139,22 +143,19 @@ def policyEmbeddings3D(controller):
     ax.plot_surface(x_sphere, y_sphere, z_sphere, color='whitesmoke', alpha=0.15, edgecolor='none')
     ax.plot_wireframe(x_sphere, y_sphere, z_sphere, color='gray', alpha=0.1, linewidth=0.5)
 
-    # 5. Scatter and Annotate each policy
+    # Scatter and Annotate each policy
     for i, env_name in enumerate(controller.pol_names):
         x, y, z = coords_3d_norm[i, 0], coords_3d_norm[i, 1], coords_3d_norm[i, 2]
+        base_name = env_name.split("_AdaptedFrom_")[0]
+        c = domain_colors[base_name]
         
         # Draw the point on the sphere surface
-        ax.scatter(x, y, z, color=colors(i), s=150, edgecolor='black', depthshade=True, label=env_name)
+        ax.scatter(x, y, z, color=c, s=150, edgecolor='black', depthshade=True, label=env_name)
         
         # Draw a faint line from the origin to the point (shows the vector)
-        ax.plot([0, x], [0, y], [0, z], color=colors(i), linestyle='--', alpha=0.6, linewidth=1.5)
-        
-        # Add the text label, pushed slightly outward (1.1x) from the sphere surface so it doesn't clip
-        ax.text(x * 1.1, y * 1.1, z * 1.1, env_name, 
-                fontsize=9, fontweight='bold',
-                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.8))
+        ax.plot([0, x], [0, y], [0, z], color=c, linestyle='--', alpha=0.6, linewidth=1.5)
 
-    # 6. Formatting
+    # Formatting
     # Draw origin axes
     ax.plot([-1.2, 1.2],[0, 0], [0, 0], color='gray', linestyle='-', linewidth=0.5)
     ax.plot([0, 0], [-1.2, 1.2], [0, 0], color='gray', linestyle='-', linewidth=0.5)
