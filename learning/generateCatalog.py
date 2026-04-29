@@ -13,18 +13,14 @@ def main():
     as well as the adapted policies using the flat terrain policy trained from scratch as a checkpoint.
     '''
 
-    env_name = "Go2StrollFlatTerrain"
-
-    flat_env = load_env(env_name, IMPL)
+    flat_env = load_env("Go2StrollFlatTerrain", IMPL)
     rough_env = load_env("Go2StrollRoughTerrain", IMPL)
     slippery_env = load_env("Go2StrollSlipperyTerrain", IMPL)
-    env_blocked = load_env(env_name, IMPL, breakLeg=True)
+    env_blocked = load_env("Go2StrollFlatTerrain", IMPL, breakLeg=True)
 
     obs_shape, act_shape = flat_env.observation_size, flat_env.action_size
 
-    # Wiping clean the current catalog
-    if os.path.exists(MODELS_ROOT):
-        shutil.rmtree(MODELS_ROOT)
+    # Create a new catalog
     os.makedirs(MODELS_ROOT)
     
     all_envs = [flat_env, rough_env, slippery_env, env_blocked]
@@ -66,9 +62,9 @@ def main():
 
     initialCatalog = os.listdir(MODELS_ROOT)
     for name in initialCatalog:
-        env = getEnv(name)
-        if name == "FlatTerrain":
-            continue
+        env_name = name.split("_AdaptedFrom_")[0]
+        env = getEnv(env_name)
+
         for base_name in initialCatalog:
             if name == base_name or "Adapted" not in base_name:
                 continue
@@ -78,7 +74,7 @@ def main():
             controller.setEnv(env)
             controller.adapt_policy(base_name)
             last_pol = sorted(Path(MODELS_ROOT).iterdir(), key=os.path.getctime)[-1]
-            shutil.move(last_pol, last_pol.with_stem(f"{name}_AdaptedFrom_{base_name}"))
+            shutil.move(last_pol, last_pol.with_stem(f"{env_name}_AdaptedFrom_{base_name}"))
 
 if __name__ == "__main__":
     main()
