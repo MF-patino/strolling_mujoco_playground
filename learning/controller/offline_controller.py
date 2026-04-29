@@ -188,7 +188,7 @@ class OfflineRobotController(RobotController):
             err = jp.mean(jp.linalg.norm(self.getPredictionWM(wm_state, wm_stats, obs_data, act_data) - next_data, axis=1))
             
             # Calculate surprise by subtracting the OLD policy's native baseline noise
-            new_column.append(err - self.native_errors[env_name][0])
+            new_column.append(jp.abs(err - self.native_errors[env_name][0]))
             
         # Reshape to column vector (N, 1) and append to the existing matrix (N, N) -> (N, N+1)
         new_column = jp.array(new_column).reshape(-1, 1)

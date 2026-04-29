@@ -63,7 +63,7 @@ class RobotController:
         # KS-ADWIN detector configuration:
         # total_size=1000: 20 seconds of total memory
         # window_size=100: Detect changes based on the last 2 seconds of data
-        self.detector = KSDriftDetector(total_size=1000, window_size=100, adwin_delta=.01)
+        self.detector = KSDriftDetector(total_size=1000, window_size=100, adwin_delta=.1)
 
         # GP search parameters:
         self.errors = {name: [] for name in self.pol_names}
@@ -74,10 +74,10 @@ class RobotController:
         self.max_pol_emb_dim = 4
         # Policies are safely sampled 25 times (.5 seconds) each iteration.
         # Switching policies at a higher rate can cause stability issues.
-        self.increment_samples = 25
+        self.increment_samples = 20
         # After sampling, we discard the first 15 samples of each iteration when
         # fitting the GP. This is done to disregard the noise when switching policies
-        self.noisy_samples = 15
+        self.noisy_samples = 5
         # If the final policy selected is different from the currently
         # loaded one, wait a few more timesteps before measuring policy
         # performance to stabilize the robot
@@ -104,7 +104,7 @@ class RobotController:
         # JIT compile the gradient descent logic
         self.fast_update = jax.jit(train_step)
 
-    def export_history(self, path):
+    def export_history(self, path, fell=False):
         data = {
             "inaffinity_matrix": self.inaffinity_matrix,
             "pol_names": self.pol_names,
@@ -115,6 +115,7 @@ class RobotController:
             "drift_indices": self.drift_indices,
             "policy_embeddings": self.policy_embeddings,
             "env_changes": self.env_changes,
+            "fell": fell,
             "gp_states": self.gp_states
         }
         with open(path, 'wb') as f:
@@ -310,9 +311,9 @@ class RobotController:
         prior_variance = float(max(1.0, jp.max(normalized_alpha) * 2.0))
 
         max_dist = jp.sqrt(min(len(self.pol_names), self.max_pol_emb_dim))
-        kernel = C(prior_variance, constant_value_bounds="fixed") * RBF(length_scale=max_dist/2, length_scale_bounds=(1e-2, max_dist))
+        kernel = C(prior_variance, constant_value_bounds="fixed") * RBF(length_scale=max_dist/2, length_scale_bounds="fixed")
 
-        self.gp = GaussianProcessRegressor(kernel=kernel, normalize_y=True, alpha=normalized_alpha)
+        self.gp = GaussianProcessRegressor(kernel=kernel, normalize_y=True, alpha=normalized_alpha, optimizer=None)
         self.gp.fit(self.X_train, self.y_train)
 
         polInfo = [self.predictPolicyScore(name, active_name) + (name,) for name in self.policies]
@@ -345,9 +346,6 @@ class RobotController:
             for name in self.samples2collect:
                 sample_num = len(self.sampled_errors[name])
                 if sample_num < self.samples2collect[name]:
-                    if prev_active_name != name:
-                        print(f"Sampling {name}.")
-
                     self.active_wm = self.wm_dict[name]
                     self.inference = self.policies[name]
                     break
@@ -370,8 +368,6 @@ class RobotController:
 
                     self.active_wm = self.wm_dict[next_name]
                     self.inference = self.policies[next_name]
-
-                    print(f"Beginning iteration {self.iteration} with {next_name}.")
                 elif self.iteration == self.max_iterations:
                     # To make the final decision, delegating on the GP to choose the best policy may be incorrect.
                     # The GP is curious and may want to explore a novel route after having seen a lot of data of the
@@ -381,12 +377,13 @@ class RobotController:
                     errs = [(self.getFinalPolicyScore(pol_name), pol_name) for pol_name in self.sampled_errors]
                     _, next_name = max(errs)
 
-                    print(f"Converged on {next_name}.")
+                    if self.generatePlots:
+                        print(f"Converged on {next_name}.")
                     self.set_policy(next_name)
 
                     if prev_active_name != next_name:
                         self.iteration += 1
-                        print("Waiting extra time after final switch")
+                        # We need to wait some extra time after the final switch
                         self.samples2collect[next_name] += self.extra_timesteps
                     else:
                         self.sampling = False
@@ -405,7 +402,7 @@ class RobotController:
         active_name, wm, stats = self.active_wm
         error = self.getErrorWM(active_name, wm, stats, obs, action, next_obs)
         # Only needed for plotting WM error of all WMs
-        [self.getErrorWM(name, wm, stats, obs, action, next_obs) for name, wm, stats in self.wms if name != active_name]
+        #[self.getErrorWM(name, wm, stats, obs, action, next_obs) for name, wm, stats in self.wms if name != active_name]
             
         # Fill out histories for plotting
         self.contact_history.append(state.info["last_contact"])
@@ -435,10 +432,11 @@ class RobotController:
         is_drift, _, policy_performance_alert = self.detector.update(error, self.native_errors[active_name])
 
         if is_drift or policy_performance_alert:
-            if policy_performance_alert:
-                print(f"Policy performance alert")
-            else:
-                print(f"Domain change detected")
+            if self.generatePlots:
+                if policy_performance_alert:
+                    print(f"Policy performance alert")
+                else:
+                    print(f"Domain change detected")
 
             # The only case where a performance alert is not a valid drift detection
             # happens when the actual drift detection module still doesn't have enough samples yet.
@@ -467,7 +465,7 @@ class RobotController:
             # consecutive, very big error samples are enough signal for it to fire.
             # IF not performance alert: we can assign last obtained errors so that we may start the search process
             # with a bit more useful data.
-            init_samples = 2 if policy_performance_alert else self.increment_samples-1
+            init_samples = 10 if policy_performance_alert else self.increment_samples-1
             samples = self.errors[active_name][-init_samples:]
             self.sampled_errors[active_name] = samples
 

@@ -5,7 +5,7 @@ import numpy as np
 
 class KSDriftDetector:
     def __init__(self, total_size=1000, window_size=250, adwin_delta=1e-3, 
-                 performance_alert_threshold=1e-5, hertz=50):
+                 performance_alert_threshold=1e-4, hertz=50):
         """
         KS-based drift detector with ADWIN on the KS statistic.
 
@@ -71,7 +71,7 @@ class KSDriftDetector:
             self.stat_values.append(0)
             return False, 0., policy_performance_alert
         elif policy_performance_alert:
-            self.reset(data)
+            self.reset()
             return True, 0., policy_performance_alert
         
         # Reference: Everything EXCEPT the last N elements
@@ -96,13 +96,13 @@ class KSDriftDetector:
                 is_drift = True
 
         if is_drift:
-            self.reset(data)
+            self.reset()
 
         return is_drift, statistic, False
     
     # The reference data at the point of a domain change detection is filled with the previous domain's prediction errors. 
     # This is stale data as now we are only concerned about the data from the new domain the robot is in.
     # In this method, the reference data is cleared and the adwin detector is also reset
-    def reset(self, data):
+    def reset(self):
         self.buffer.clear()
         self.adwin._reset()
