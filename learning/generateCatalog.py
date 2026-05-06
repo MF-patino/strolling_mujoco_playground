@@ -1,9 +1,8 @@
-import os, shutil
+import os
 import jax.numpy as jp
 from controller.offline_controller import OfflineRobotController
 from worldModel.common import MODELS_ROOT
 from visualize_adaptation import load_env, IMPL
-from pathlib import Path
 
 ALL_FROM_SCRATCH = False
 
@@ -21,7 +20,7 @@ def main():
     obs_shape, act_shape = flat_env.observation_size, flat_env.action_size
 
     # Create a new catalog
-    os.makedirs(MODELS_ROOT)
+    os.makedirs(MODELS_ROOT, exist_ok=True)
     
     all_envs = [flat_env, rough_env, slippery_env, env_blocked]
     pol_base_names = ["FlatTerrain", "RoughTerrain", "SlipperyTerrain", "BlockedKnee"]
@@ -29,23 +28,23 @@ def main():
     for base_name, env in zip(pol_base_names, all_envs):
         controller = OfflineRobotController(obs_shape, act_shape, initial_pair=None, 
                                             generatePlots = False, cmd = jp.array([1., 0., 0.]))
-        controller.setEnv(env)
-        controller.pol_names = []
-        last_pol = sorted(Path(MODELS_ROOT).iterdir(), key=os.path.getctime)[-1]
-        shutil.move(last_pol, last_pol.with_stem(base_name))
+        controller.env = env
+        # When base_policy_name = None, we train from scratch
+        controller.adapt_policy(base_policy_name=None, key_name=base_name)
 
         if not ALL_FROM_SCRATCH:
             # Only train from scratch FlatTerrain
             break
 
+    if ALL_FROM_SCRATCH:
+        return
+
     # Adapting from FlatTerrain policy
     for base_name, env in zip(pol_base_names[1:], all_envs[1:]):
         controller = OfflineRobotController(obs_shape, act_shape, initial_pair=None, 
                                             generatePlots = False, cmd = jp.array([1., 0., 0.]))
-        controller.setEnv(env)
-        controller.adapt_policy(pol_base_names[0])
-        last_pol = sorted(Path(MODELS_ROOT).iterdir(), key=os.path.getctime)[-1]
-        shutil.move(last_pol, last_pol.with_stem(f"{base_name}_AdaptedFrom_{pol_base_names[0]}"))
+        controller.env = env
+        controller.adapt_policy(pol_base_names[0], key_name=base_name)
     
     # Adapting all combinations
     def getEnv(pol_name):
@@ -71,10 +70,8 @@ def main():
             
             controller = OfflineRobotController(obs_shape, act_shape, initial_pair=None, 
                                             generatePlots = False, cmd = jp.array([1., 0., 0.]))
-            controller.setEnv(env)
-            controller.adapt_policy(base_name)
-            last_pol = sorted(Path(MODELS_ROOT).iterdir(), key=os.path.getctime)[-1]
-            shutil.move(last_pol, last_pol.with_stem(f"{env_name}_AdaptedFrom_{base_name}"))
+            controller.env = env
+            controller.adapt_policy(base_name, key_name=env_name)
 
 if __name__ == "__main__":
     main()
