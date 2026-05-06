@@ -34,8 +34,7 @@ class OfflineRobotController(RobotController):
 
         # Setup paths and parameters
         base_ckpt_path = basePath + "/" + POL_PATH.format(env_name=base_policy_name) if base_policy_name else None
-        new_policy_name = str(len(os.listdir(MODELS_ROOT)))
-        new_policy_name += "" if not key_name else "_" + key_name
+        new_policy_name = str(len(os.listdir(MODELS_ROOT))) if not key_name else key_name
         if base_policy_name:
             new_policy_name += "_AdaptedFrom_" + base_policy_name
 

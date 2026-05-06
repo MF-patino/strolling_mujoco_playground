@@ -1,6 +1,9 @@
 
 import matplotlib, os
-matplotlib.use('TkAgg') 
+try:
+    matplotlib.use('TkAgg') 
+except:
+    print("Warning: Running in headless environment.")
 import matplotlib.pyplot as plt
 
 import matplotlib.cm as cm
