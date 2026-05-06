@@ -27,7 +27,7 @@ class OfflineRobotController(RobotController):
                  generatePlots = True, cmd = jp.array([1., 0., 0.])):
         RobotController.__init__(self, obs_shape, act_shape, initial_pair, jit_inference, generatePlots, cmd)
 
-    def adapt_policy(self, base_policy_name):
+    def adapt_policy(self, base_policy_name, key_name=None):
         basePath = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
         
         print("--- STARTING HEADLESS ADAPTATION FROM " + (base_policy_name if base_policy_name else "SCRATCH") + " ---")
@@ -35,6 +35,7 @@ class OfflineRobotController(RobotController):
         # Setup paths and parameters
         base_ckpt_path = basePath + "/" + POL_PATH.format(env_name=base_policy_name) if base_policy_name else None
         new_policy_name = str(len(os.listdir(MODELS_ROOT)))
+        new_policy_name += "" if not key_name else "_" + key_name
         if base_policy_name:
             new_policy_name += "_AdaptedFrom_" + base_policy_name
 
