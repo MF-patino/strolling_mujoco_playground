@@ -259,8 +259,12 @@ def plotGaitPattern(controller, env_change = None):
         # on y_level and has a thickness of 0.4.
         ax.broken_barh(xranges, (y_level - 0.2, 0.4), facecolors='black', zorder=4)
 
-    # 2. Add background colors for the active policies
-    cmap = plt.cm.get_cmap('Pastel1', len(controller.pol_names))
+    # Get a distinct colormap for the policies
+    # Extract unique base domains (target domains) from the policy names
+    base_names = [name.split("_AdaptedFrom_")[0] for name in controller.pol_names]
+    unique_base_names = list(set(base_names))
+    cmap = cm.get_cmap('tab10', len(unique_base_names))
+    domain_colors = {domain: cmap(i) for i, domain in enumerate(unique_base_names)}
     
     start_idx = 0
     recent_policy_history = controller.policy_history[start_step:end_step]
@@ -269,9 +273,9 @@ def plotGaitPattern(controller, env_change = None):
     for t in range(1, len(recent_policy_history)):
         # If the policy changed, or we reached the end of the simulation
         if recent_policy_history[t] != current_pol or t == len(recent_policy_history) - 1:
-            pol_idx = controller.pol_names.index(current_pol)
+            c = domain_colors[current_pol.split("_AdaptedFrom_")[0]]
             # Paint the background for that duration
-            ax.axvspan(start_idx, t, facecolor=cmap(pol_idx), alpha=0.6)
+            ax.axvspan(start_idx, t, facecolor=c, alpha=0.6)
             
             start_idx = t
             current_pol = recent_policy_history[t]
@@ -288,18 +292,18 @@ def plotGaitPattern(controller, env_change = None):
     ax.set_yticks([0, 1, 2, 3])
     ax.set_yticklabels(feet_names, fontweight='bold')
     ax.set_xlabel("Time step (50Hz)", fontsize=12)
-    ax.set_title("Gait Contact Pattern During Online Adaptation", fontsize=14)
+    ax.set_title(f"Gait Contact Pattern During Online Adaptation: {prev_env} -> {env_name}", fontsize=14)
     
     # Create a clean legend for the background colors
     recent_pols = list(set(recent_policy_history))
-    legend_elements =[Patch(facecolor=cmap(controller.pol_names.index(pol)), alpha=0.6, label=pol) for pol in recent_pols]
+    legend_elements =[Patch(facecolor=domain_colors[pol.split("_AdaptedFrom_")[0]], alpha=0.6, label=pol) for pol in recent_pols]
     
     # Add a red dashed line to the legend for the drift detector
     legend_elements.append(Line2D([0], [0], color='red', linestyle='--', linewidth=2, label='Drift Detected'))
     legend_elements.append(Line2D([0], [0], color='green', linestyle='--', linewidth=2, label=f'Change: {prev_env} -> {env_name}'))
     
     # Place legend outside the plot so it doesn't cover the gait bars
-    ax.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(1.01, 1), title="Active State")
+    ax.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(1.01, 1), title="Legend")
 
     plt.tight_layout()
     plt.show()
