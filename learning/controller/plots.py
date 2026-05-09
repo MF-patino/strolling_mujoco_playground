@@ -12,6 +12,8 @@ import jax.numpy as jp
 from matplotlib.patches import Patch
 from sklearn.decomposition import TruncatedSVD
 from matplotlib.lines import Line2D
+import umap
+
 PLOT_DATA_DIR = "plotData"
 TRAIN_DATA_SUBDIR = "training"
 
@@ -311,75 +313,135 @@ def plotGaitPattern(controller, env_change = None):
     plt.tight_layout()
     plt.show()
 
-def plotGPSearch(controller, gp_states = None):
+
+def plotGPSearch(controller, gp_states=None):
+    import warnings
+
     # Get the sequence of iterations for the most recent drift
     if gp_states is None:
         gp_states = controller.gp_states[-1]
 
     num_iterations = len(gp_states)
     
-    # Create a subplot grid: 1 row, N columns
-    fig, axes = plt.subplots(num_iterations, 1, figsize=(5 * num_iterations, 5), layout="constrained")
-    axes = axes.flatten()
+    # 1. Collapse the 4D embeddings to a fixed 1D axis using UMAP
+    # UMAP preserves both local clustering (redundant policies) AND global distances (domains)
+    pol_names_list = list(controller.policy_embeddings.keys())
+    emb_matrix = np.array([controller.policy_embeddings[name] for name in pol_names_list])
+    
+    # n_neighbors dictates how much local vs global structure to preserve. 
+    # For a small catalog, a small number (e.g., 3 to 5) works perfectly.
+    n_neighbors = min(5, len(pol_names_list) - 1)
+    
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        reducer = umap.UMAP(n_components=1, n_neighbors=n_neighbors, min_dist=0.1, random_state=42)
+        coords_1d = reducer.fit_transform(emb_matrix).flatten()
+    
+    x_coords = {name: coord for name, coord in zip(pol_names_list, coords_1d)}
+    
+    # Extract unique domains and create a Colormap
+    base_names = [name.split("_AdaptedFrom_")[0] for name in pol_names_list]
+    unique_base_names = list(set(base_names))
+    cmap = cm.get_cmap('tab10', len(unique_base_names))
+    domain_colors = {domain: cmap(i) for i, domain in enumerate(unique_base_names)}
+    
+    # Create a subplot grid: N rows, 1 column. 
+    fig, axes = plt.subplots(num_iterations, 1, figsize=(12, 3.5 * num_iterations), 
+                             sharex=True, layout="constrained")
+    
+    if num_iterations == 1: axes = [axes]
+    else: axes = axes.flatten()
 
     for ax_idx, (iteration, base_policy_name, chosen_policy_name, polInfo) in enumerate(gp_states):
         ax = axes[ax_idx]
-        base_emb = controller.policy_embeddings[base_policy_name]
 
-        distances, means, stds, names, colors = [], [], [], [], []
+        xs, means, stds, names = [], [], [], []
+        colors, markers, mecs, mews, sizes, zorders = [], [],[], [], [],[]
 
-        # 1. Query GP beliefs for all policies in catalog
-        for pol_name, emb in controller.policy_embeddings.items():
-            cos_dist = 1.0 - jp.dot(emb, base_emb) / (jp.linalg.norm(emb) * jp.linalg.norm(base_emb))
+        # 2. Query GP beliefs for all policies in catalog
+        for pol_name in pol_names_list:
+            x_val = x_coords[pol_name]
             
             # Find the belief stored in this specific iteration's polInfo
-            mean, std = [(mean, std) for _, mean, std, name in polInfo if pol_name == name][0]
+            mean, std =[(m, s) for _, m, s, name in polInfo if pol_name == name][0]
             
-            distances.append(float(cos_dist))
+            xs.append(float(x_val))
             means.append(float(mean[0]))
             stds.append(float(std[0]))
             names.append(pol_name)
             
-            # Color coding
-            if pol_name == base_policy_name: colors.append('black')
-            elif pol_name == chosen_policy_name: colors.append('red')
-            else: colors.append('gray')
+            # Color based on Target Domain
+            base_domain = pol_name.split("_AdaptedFrom_")[0]
+            colors.append(domain_colors[base_domain])
+            
+            # Shape/Border based on GP Status
+            if pol_name == base_policy_name:
+                markers.append('D') # Diamond
+                mecs.append('black'); mews.append(2.5); sizes.append(100); zorders.append(5)
+            elif pol_name == chosen_policy_name:
+                markers.append('*') # Star
+                mecs.append('red'); mews.append(2.0); sizes.append(300); zorders.append(6)
+            else:
+                markers.append('o') # Circle
+                mecs.append('gray'); mews.append(1.0); sizes.append(60); zorders.append(3)
 
-        # Sort everything by distance so we can draw a continuous confidence band (optional but looks nice)
-        sorted_indices = np.argsort(distances)
-        distances = np.array(distances)[sorted_indices]
-        means = np.array(means)[sorted_indices]
-        stds = np.array(stds)[sorted_indices]
+        # Sort everything by the 1D X-coordinate
+        sorted_indices = np.argsort(xs)
+        xs, means, stds = np.array(xs)[sorted_indices], np.array(means)[sorted_indices], np.array(stds)[sorted_indices]
         names = [names[i] for i in sorted_indices]
         colors = [colors[i] for i in sorted_indices]
+        markers = [markers[i] for i in sorted_indices]
+        mecs = [mecs[i] for i in sorted_indices]
+        mews = [mews[i] for i in sorted_indices]
+        sizes =[sizes[i] for i in sorted_indices]
+        zorders = [zorders[i] for i in sorted_indices]
 
-        # Plot the GP's uncertainty bound (Mean ± Std) as a shaded region
-        # We use a smooth line connecting the discrete policies to visualize the "landscape"
-        ax.plot(distances, means, color='blue', alpha=0.5, linestyle='--', zorder=1)
-        ax.fill_between(distances, means - stds, means + stds, color='blue', alpha=0.15, zorder=0, label='GP Uncertainty ($\sigma$)')
+        # 3. Plot the GP's uncertainty bound (Mean ± Std)
+        ax.plot(xs, means, color='blue', alpha=0.4, linestyle='--', zorder=1)
+        ax.fill_between(xs, means - stds, means + stds, color='blue', alpha=0.1, zorder=0)
 
-        # Scatter the policies
-        for i in range(len(distances)):
-            ax.errorbar(distances[i], means[i], yerr=stds[i], fmt='o', color=colors[i], 
-                        markersize=8, capsize=5, markeredgecolor='black', zorder=3)
+        # Scatter the policies individually so we can apply specific markers
+        for i in range(len(xs)):
+            ax.errorbar(xs[i], means[i], yerr=stds[i], fmt=markers[i], 
+                        ecolor='gray', elinewidth=1.5, capsize=3, # Error bar style
+                        markerfacecolor=colors[i], markeredgecolor=mecs[i], 
+                        markeredgewidth=mews[i], markersize=np.sqrt(sizes[i]), zorder=zorders[i])
             
-            # Annotate the policies (staggering them slightly to avoid overlap)
-            y_offset = stds[i] + 0.5 if i % 2 == 0 else -stds[i] - 1.0
-            ax.annotate(names[i], (distances[i], means[i]), xytext=(0, y_offset), 
-                        textcoords='offset points', ha='center', fontsize=8,
-                        bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="gray", alpha=0.7))
+            # Annotate only the Base and Chosen policies to prevent massive text overlap
+            if markers[i] in ['D', '*']:
+                # FIX: Push labels strictly UP using fixed screen points (staggered 25 or 45 points high)
+                y_offset = 10 if i % 2 == 0 else 45
+                
+                ax.annotate(names[i], (xs[i], means[i]), xytext=(0, y_offset), 
+                            textcoords='offset points', ha='center', fontsize=8, fontweight='bold',
+                            # FIX: Set alpha to 0.4 so the box is highly transparent
+                            bbox=dict(boxstyle="round,pad=0.2", fc="white", ec=mecs[i], alpha=0.4), zorder=10)
 
-        # 4. Formatting
-        ax.set_xlabel(f"Cosine Distance from {base_policy_name} (Iteration {iteration})", fontsize=12)
+        # Formatting
+        ax.set_title(f"Iteration {iteration}", fontsize=12, fontweight='bold')
+        ax.grid(True, linestyle='--', alpha=0.3)
+        
+        # Add a little extra top margin so the labels don't get clipped by the subplot boundary
+        ax.margins(y=0.2)
 
-    # 3. Legend on the last plot
-    custom_lines = [
-        Line2D([0], [0], marker='o', color='w', markerfacecolor='black', markersize=8),
-        Line2D([0], [0], marker='o', color='w', markerfacecolor='red', markersize=8),
-        Line2D([0], [0], marker='o', color='w', markerfacecolor='gray', markersize=8)
+    axes[-1].set_xlabel("1D UMAP Projection of Latent Policy Space", fontsize=12)
+    fig.supylabel("Predicted Error (GP Mean)", fontsize=14)
+
+    # --- CUSTOM LEGENDS ---
+    # Legend 1: Domains (Colors)
+    domain_lines =[Line2D([0], [0], marker='o', color='w', markerfacecolor=domain_colors[d], 
+                           markersize=10, markeredgecolor='gray', label=d) for d in unique_base_names]
+    
+    # Legend 2: Status (Shapes)
+    status_lines = [
+        Line2D([0], [0], marker='D', color='w', markerfacecolor='white', markeredgecolor='black', markeredgewidth=2.5, markersize=8, label='Base Policy'),
+        Line2D([0], [0], marker='*', color='w', markerfacecolor='white', markeredgecolor='red', markeredgewidth=2, markersize=14, label='Chosen (UCB)'),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='white', markeredgecolor='gray', markeredgewidth=1, markersize=8, label='Other')
     ]
-    axes[-1].legend(custom_lines, ['Base Policy', 'Chosen', 'Other'], loc='upper right', fontsize=8)
+    
+    blank_line = Line2D([0], [0], color='w', label=' ')
 
-    fig.supylabel("Predicted Reward (GP Mean)", fontsize=14)
-    #plt.tight_layout()
+    axes[0].legend(handles=domain_lines + [blank_line] + status_lines, 
+                   loc='upper left', bbox_to_anchor=(1.02, 1.05), fontsize=9, framealpha=0.9)
+
     plt.show()
